@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RDPS Fire Weather</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="/static/style.css?v=6">
+</head>
+<body>
+<div id="map"></div>
+<canvas id="arrows"></canvas>
+
+<header class="panel" id="top">
+  <div class="brand">
+    <span class="dot" id="live-dot" title="Live feed status"></span>
+    <div>
+      <div class="title">RDPS Fire Weather</div>
+      <div class="sub" id="run-label">Loading…</div>
+    </div>
+  </div>
+  <div class="controls">
+    <select id="aoi" title="Area of interest"><option value="">Custom point</option></select>
+    <label class="chk">Wind
+      <select id="wind-mode" title="Wind display">
+        <option value="particles">Particles</option>
+        <option value="arrows">Arrows</option>
+        <option value="off">Off</option>
+      </select>
+    </label>
+    <label class="opac">Opacity <input type="range" id="opacity" min="0.2" max="1" step="0.05" value="0.75"></label>
+    <select id="run-select" title="Model run"></select>
+  </div>
+</header>
+
+<nav class="panel" id="vars" role="tablist" aria-orientation="vertical" aria-label="Map layer"></nav>
+
+<div class="panel" id="banner" hidden></div>
+
+<div class="panel" id="readout" hidden></div>
+
+<div class="panel" id="legend">
+  <div class="legend-title" id="legend-title"></div>
+  <canvas id="legend-bar" width="260" height="12"></canvas>
+  <div class="legend-ticks" id="legend-ticks"></div>
+</div>
+
+<aside class="panel" id="meteogram" hidden>
+  <div class="mg-head">
+    <div>
+      <div class="mg-title" id="mg-title">Point forecast</div>
+      <div class="sub" id="mg-sub"></div>
+    </div>
+    <div class="mg-actions">
+      <a class="btn" id="mg-report" target="_blank" rel="noopener">Burn report ↗</a>
+      <a class="btn" id="mg-fire" target="_blank" rel="noopener">Fire growth ↗</a>
+      <a class="btn" id="mg-firewx" target="_blank" rel="noopener">Fire wx forecast ↗</a>
+      <button class="icon" id="mg-close" aria-label="Close">×</button>
+    </div>
+  </div>
+  <div class="mg-chart"><canvas id="ch-trh"></canvas></div>
+  <div class="mg-chart"><canvas id="ch-wind"></canvas></div>
+  <div class="mg-chart"><canvas id="ch-fwi"></canvas></div>
+  <div class="mg-chart"><canvas id="ch-precip"></canvas></div>
+</aside>
+
+<footer class="panel" id="timebar">
+  <button class="icon play" id="play" aria-label="Play">▶</button>
+  <div class="time-main">
+    <div class="valid" id="valid-time">—</div>
+    <div class="sub" id="valid-sub"></div>
+  </div>
+  <div class="slider-wrap">
+    <div class="avail" id="avail"></div>
+    <input type="range" id="hour" min="0" max="84" step="1" value="0">
+    <div class="day-ticks" id="day-ticks"></div>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/static/windlayer.js?v=1"></script>
+<script src="/static/app.js?v=13"></script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Burn Weather Report</title>
+<link rel="stylesheet" href="/static/report.css?v=5">
+</head>
+<body>
+<form class="controls no-print" id="controls">
+  <div class="row">
+    <label>Product
+      <select name="product">
+        <option value="morning">0800 Burn-day forecast + 2-day outlook</option>
+        <option value="midday">1200 Midday update</option>
+        <option value="afternoon">1500 Afternoon update + overnight</option>
+        <option value="spot">Spot forecast (next 6 h)</option>
+      </select>
+    </label>
+    <label>Area <select name="aoi"><option value="">Custom point</option></select></label>
+    <label>Burn date <input type="date" name="date"></label>
+    <label>Location name <input name="name" placeholder="e.g. CFB Shilo RTA – Unit 4"></label>
+    <label>Lat <input name="lat" size="8"></label>
+    <label>Lon <input name="lon" size="8"></label>
+  </div>
+  <div class="row">
+    <label>Provider <input name="provider" placeholder="Met provider / JMC"></label>
+    <label class="wide">Distribution <input name="distribution" placeholder="Burn Boss, Fire Chief / Deputy, RTA Sustainability Officer, Range Control"></label>
+  </div>
+  <div class="row">
+    <span class="hint">Amendment criteria:</span>
+    <label>Wind &gt; <input name="wind" type="number" step="1" size="4"> km/h</label>
+    <label>Gust &gt; <input name="gust" type="number" step="1" size="4"> km/h</label>
+    <label>RH &lt; <input name="rh_min" type="number" step="1" size="4"> %</label>
+    <label>CAPE &gt; <input name="cape" type="number" step="50" size="5"> J/kg</label>
+    <label>Shift &gt; <input name="shift_deg" type="number" step="5" size="4"> °</label>
+    <span class="spacer"></span>
+    <button type="submit">Update</button>
+    <button type="button" id="print">Print / PDF</button>
+    <a href="/static/firewx.html" id="firewx-link" style="color:#e8ecf1">Fire wx forecast ↗</a>
+  </div>
+</form>
+
+<details class="rx-editor no-print" id="rx-editor" open>
+  <summary>Prescription limits <small>(GO / NO-GO; saved for this area)</small></summary>
+  <div class="rx-body"></div>
+  <div class="rx-foot"><button type="button" id="rx-reset">Reset to Annex A defaults</button>
+    <small>Ventilation index units aren't stated in the annex; check the unit selector matches your prescription.</small></div>
+</details>
+
+<main id="doc" class="doc"><p class="loading">Building report…</p></main>
+
+<script src="/static/report.js?v=6"></script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FBP Fire Growth</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="/static/fire.css?v=1">
+</head>
+<body>
+<aside id="panel">
+  <header>
+    <div>
+      <div class="title">FBP Fire Growth</div>
+      <div class="sub">FBP System + RDPS hourly forecast</div>
+    </div>
+    <a class="link" href="/" title="Weather viewer">Weather ↗</a>
+  </header>
+
+  <section class="controls">
+    <label>Area <select id="aoi"></select></label>
+    <div class="ign" id="ign-box">
+      <div class="ign-head"><b>Ignition</b> <span class="hint" id="ign-hint">click the map to place it</span></div>
+      <div id="ign-pos" class="mono">—</div>
+    </div>
+    <div class="grid2">
+      <label>Start <select id="start"></select></label>
+      <label>Duration <select id="duration">
+        <option>1</option><option>2</option><option>3</option><option>4</option><option selected>6</option>
+        <option>8</option><option>10</option><option>12</option><option>18</option><option>24</option>
+      </select> h</label>
+    </div>
+    <details>
+      <summary>Fuel and model options</summary>
+      <div class="grid2">
+        <label>Domain radius <select id="radius">
+          <option value="4">4 km (30 m)</option><option value="8" selected>8 km (60 m)</option>
+          <option value="12">12 km (60 m)</option><option value="20">20 km (90 m)</option>
+        </select></label>
+        <label>Grass curing % <input id="curing" type="number" min="0" max="100" placeholder="seasonal"></label>
+        <label>Deciduous <select id="leaf">
+          <option value="auto">Auto (by date)</option><option value="leafless">Leafless (D-1/M-1)</option>
+          <option value="green">Green (D-2/M-2)</option></select></label>
+        <label>Unclassified land <select id="unclassified">
+          <option value="NF">Non-fuel</option><option value="O1A">O-1a matted grass</option>
+          <option value="O1B">O-1b standing grass</option></select></label>
+        <label>Grass fuel load <input id="gfl" type="number" step="0.05" min="0.05" value="0.35"> kg/m²</label>
+      </div>
+      <div class="sub" style="margin:8px 0 4px">Starting codes (blank = CWFIS FWI1987 for the location)</div>
+      <div class="grid3">
+        <label>FFMC <input id="ffmc" type="number" step="0.1"></label>
+        <label>DMC <input id="dmc" type="number" step="0.1"></label>
+        <label>DC <input id="dc" type="number" step="1"></label>
+      </div>
+    </details>
+    <button id="run" disabled>Run simulation</button>
+    <div id="status" class="status"></div>
+  </section>
+
+  <section id="results" hidden>
+    <div class="cards" id="cards"></div>
+    <div id="warn"></div>
+    <div class="timebar">
+      <button id="play" class="play" aria-label="Play">▶</button>
+      <input type="range" id="tslider" min="0" max="360" step="1" value="360">
+      <select id="speed" title="Playback speed">
+        <option value="20">1 h / 3 s</option><option value="40" selected>1 h / 1.5 s</option><option value="90">1 h / 0.7 s</option>
+      </select>
+    </div>
+    <div class="tlabel"><span id="tlabel" class="mono"></span> <span id="twx" class="sub"></span></div>
+    <div class="layer-toggle">
+      <label><input type="radio" name="colour" value="time" checked> Arrival time</label>
+      <label><input type="radio" name="colour" value="hfi"> Intensity class</label>
+      <label><input type="checkbox" id="show-fuel" checked> Fuel types</label>
+      <label>Wind <select id="wind-mode"><option value="particles">Particles</option><option value="arrows">Arrows</option><option value="off">Off</option></select></label>
+    </div>
+    <h3>Hourly progression</h3>
+    <div class="table-wrap"><table id="hourly"></table></div>
+    <h3>Inputs and assumptions</h3>
+    <div id="inputs" class="inputs"></div>
+  </section>
+</aside>
+
+<main id="map"></main>
+<div id="legend" class="legend"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-array@3.2.4/dist/d3-array.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-contour@4.0.2/dist/d3-contour.min.js"></script>
+<script src="/static/windlayer.js?v=1"></script>
+<script src="/static/fire.js?v=6"></script>
+</body>
+</html>

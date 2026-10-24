@@ -1,0 +1,23 @@
+{
+  "_note": "Areas of interest for the dropdowns. The first entry is the default. Coordinates are approximate base / training-area points: replace with your burn-unit or range-control coordinates as needed.",
+  "default": "shilo",
+  "areas": [
+    {"id": "shilo", "name": "CFB Shilo RTA", "prov": "MB", "lat": 49.79, "lon": -99.63},
+    {"id": "wainwright", "name": "CFB Wainwright", "prov": "AB", "lat": 52.78, "lon": -110.88},
+    {"id": "suffield", "name": "CFB Suffield", "prov": "AB", "lat": 50.27, "lon": -111.18},
+    {"id": "edmonton", "name": "CFB Edmonton", "prov": "AB", "lat": 53.67, "lon": -113.47},
+    {"id": "coldlake", "name": "4 Wing Cold Lake", "prov": "AB", "lat": 54.40, "lon": -110.28},
+    {"id": "dundurn", "name": "CFB Dundurn", "prov": "SK", "lat": 51.82, "lon": -106.52},
+    {"id": "comox", "name": "CFB Comox", "prov": "BC", "lat": 49.71, "lon": -124.89},
+    {"id": "petawawa", "name": "Garrison Petawawa", "prov": "ON", "lat": 45.90, "lon": -77.28},
+    {"id": "meaford", "name": "CFB Meaford", "prov": "ON", "lat": 44.64, "lon": -80.63},
+    {"id": "borden", "name": "CFB Borden", "prov": "ON", "lat": 44.27, "lon": -79.91},
+    {"id": "kingston", "name": "CFB Kingston", "prov": "ON", "lat": 44.23, "lon": -76.46},
+    {"id": "trenton", "name": "8 Wing Trenton", "prov": "ON", "lat": 44.12, "lon": -77.53},
+    {"id": "valcartier", "name": "BFC Valcartier", "prov": "QC", "lat": 46.90, "lon": -71.50},
+    {"id": "bagotville", "name": "BFC Bagotville", "prov": "QC", "lat": 48.33, "lon": -70.99},
+    {"id": "gagetown", "name": "CFB Gagetown", "prov": "NB", "lat": 45.75, "lon": -66.45},
+    {"id": "greenwood", "name": "14 Wing Greenwood", "prov": "NS", "lat": 44.98, "lon": -64.92},
+    {"id": "goosebay", "name": "5 Wing Goose Bay", "prov": "NL", "lat": 53.32, "lon": -60.42}
+  ]
+}

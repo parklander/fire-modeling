@@ -1,0 +1,11 @@
+pika
+requests
+numpy
+scipy
+eccodes
+fastapi
+uvicorn
+tifffile
+timezonefinder
+tzdata
+pyproj

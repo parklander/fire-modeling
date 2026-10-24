@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Downloaded and generated data: RDPS frames, FWI chain state, fuel cache, grid map.
+# Everything here is rebuilt automatically by the server (several GB).
+data/
+
+# Logs
+*.log
+
+# Claude Code local settings (launch.json is shared; personal settings aren't)
+.claude/settings.local.json
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local environment overrides
+.env
+.env.*

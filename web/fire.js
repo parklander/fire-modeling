@@ -329,7 +329,12 @@
     ].map(([v, k]) => `<div class="card"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("");
     const warns = [];
     if (d.edge_hit) warns.push("The fire reached the edge of the modelled area; increase the domain radius.");
-    if (d.ignition.snapped_m > 0) warns.push(`Ignition moved ${d.ignition.snapped_m} m to the nearest burnable cell (${esc(d.ignition.fuel)}).`);
+    if (d.incident) {
+      warns.push(`Started from ${d.incident.detections} satellite detection${d.incident.detections > 1 ? "s" : ""} (last pass ${clock(d.incident.last_seen)}): `
+        + `${n(d.initial_ha, 1)} ha of detection footprints treated as burned at the start. Footprints (375 m VIIRS, 1 km MODIS) overstate small fires.`);
+    } else if (d.ignition.snapped_m > 0) {
+      warns.push(`Ignition moved ${d.ignition.snapped_m} m to the nearest burnable cell (${esc(d.ignition.fuel)}).`);
+    }
     const uncl = d.fuels.find((f) => f.code === -9999), tot = d.fuels.reduce((s, f) => s + f.cells, 0);
     if (uncl && uncl.cells / tot > 0.1 && d.options.unclassified === "NF")
       warns.push(`${n(100 * uncl.cells / tot)}% of the area has no FBP fuel type (often agriculture) and is treated as non-fuel. Change "Unclassified land" if that's grass.`);
@@ -352,6 +357,83 @@
       <div><b>Not modelled:</b> spotting, suppression, sub-hourly wind changes, local wind effects. Head ROS and fire type are for the ignition cell's fuel.</div>
       <div><b>Fuels in the area:</b> ${d.fuels.slice(0, 8).map((f) => `${esc(f.label)} ${n(100 * f.cells / tot)}%`).join(", ")}.</div>`;
   }
+
+  // ---- satellite detections (NASA FIRMS) and auto-simulated incidents --------------------
+  const hotLayer = L.layerGroup().addTo(map);
+  const hotRenderer = L.canvas({ padding: 0.3 });
+  let INCIDENTS = [], activeIncident = null;
+  const hoursAgo = (iso) => (Date.now() - Date.parse(iso)) / 3600e3;
+  const ago = (iso) => { const h = hoursAgo(iso); return h < 1 ? `${Math.round(h * 60)} min ago` : h < 48 ? `${Math.round(h)} h ago` : `${Math.round(h / 24)} d ago`; };
+  const ageColour = (iso) => (hoursAgo(iso) < 6 ? "#ff3b1f" : hoursAgo(iso) < 24 ? "#ff9f1c" : "#ffd166");
+  const clock = (iso) => new Date(iso).toLocaleString("en-CA", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+
+  async function loadHotspots() {
+    hotLayer.clearLayers();
+    if (!$("show-hotspots").checked) return;
+    let d;
+    try { d = await (await fetch("/api/hotspots?hours=48")).json(); } catch (_) { return; }
+    for (const h of d.detections) {
+      L.circleMarker([h.lat, h.lon], {
+        renderer: hotRenderer, radius: h.persistent ? 2.5 : 4, weight: 1,
+        color: h.persistent ? "#8a939c" : "#2b0d00", fillColor: h.persistent ? "#8a939c" : ageColour(h.time),
+        fillOpacity: h.low_conf ? 0.25 : 0.9,
+      }).bindTooltip(`${esc(h.sensor)} · ${clock(h.time)} · FRP ${n(h.frp, 1)} MW${h.persistent ? " · persistent heat source (excluded)" : ""}${h.low_conf ? " · low confidence (excluded)" : ""}`)
+        .addTo(hotLayer);
+    }
+  }
+
+  async function loadIncidents() {
+    let d;
+    try { d = await (await fetch("/api/incidents")).json(); } catch (_) { $("inc-status").textContent = "unavailable"; return; }
+    INCIDENTS = d.incidents;
+    const st = d.status;
+    $("inc-status").textContent = st.error && !st.last_poll ? "FIRMS error" : st.last_poll
+      ? `FIRMS ${ago(st.last_poll)} · ${st.count ?? 0} detections, ${st.persistent ?? 0} persistent` : "waiting for the first poll…";
+    const list = $("show-all-inc").checked ? INCIDENTS : INCIDENTS.filter((i) => i.near_base);
+    $("inc-list").innerHTML = list.length ? list.slice(0, 60).map((i) => `
+      <div class="inc ${i.id === activeIncident ? "active" : ""} ${i.fresh ? "" : "stale"}" data-id="${i.id}">
+        <div class="t"><span>${n(i.distance_km, 0)} km from ${esc(i.nearest_area)}</span>${i.near_base ? `<button data-rerun="1" title="Re-run with the latest data">↻ re-run</button>` : ""}</div>
+        <div class="m">${i.detections} detection${i.detections > 1 ? "s" : ""} · last ${ago(i.last_seen)} · FRP ${n(i.max_frp, 1)} MW</div>
+        <div class="r ${i.sim_error ? "err" : ""}">${!i.fresh && i.near_base ? `No detection in the last ${d.max_age_h} h, probably out; not simulated automatically${i.sim ? " (an earlier run is still viewable)" : ""}`
+          : i.sim_error ? esc(i.sim_error)
+          : i.sim ? `Forecast ${n(i.sim.area_ha, i.sim.area_ha < 10 ? 1 : 0)} ha by +${i.sim.hours} h if unsuppressed · head ${n(i.sim.head_ros_max, 1)} m/min`
+          : i.near_base ? "Simulation pending…" : `Not simulated (over ${d.base_km} km from a base)`}</div>
+      </div>`).join("")
+      : `<div class="sub">No fires detected within ${d.base_km} km of a base in the last 48 h.</div>`;
+  }
+
+  $("inc-list").onclick = async (e) => {
+    const cardEl = e.target.closest(".inc");
+    if (!cardEl) return;
+    const inc = INCIDENTS.find((x) => x.id === cardEl.dataset.id);
+    if (!inc) return;
+    stop();
+    map.setView([inc.lat, inc.lon], 12);
+    if (e.target.dataset.rerun) {
+      $("status").className = "status";
+      $("status").textContent = "Re-running the incident simulation…";
+      const r = await fetch(`/api/incidents/${inc.id}/simulate`, { method: "POST" });
+      if (!r.ok) { $("status").textContent = (await r.json()).detail; $("status").className = "status err"; await loadIncidents(); return; }
+      await loadIncidents();
+    } else if (!inc.sim) {
+      $("status").textContent = inc.sim_error || (inc.near_base ? "This incident hasn't been simulated yet." : "Incidents this far from a base aren't simulated automatically.");
+      return;
+    }
+    const r = await fetch(`/api/incidents/${inc.id}/sim`);
+    if (!r.ok) { $("status").textContent = "Simulation not available."; return; }
+    activeIncident = inc.id;
+    const d = await r.json();
+    if (ignMarker) ignMarker.setLatLng([inc.lat, inc.lon]);
+    await showResult(d);
+    $("status").className = "status";
+    $("status").textContent = `Detected fire ${n(inc.distance_km, 0)} km from ${inc.nearest_area}: growth forecast from the latest satellite pass.`;
+    loadIncidents();
+  };
+  $("show-hotspots").onchange = loadHotspots;
+  $("show-all-inc").onchange = loadIncidents;
+  loadIncidents();
+  loadHotspots();
+  setInterval(() => { loadIncidents(); loadHotspots(); }, 5 * 60e3);
 
   $("tslider").oninput = (e) => { stop(); setTime(+e.target.value); };
   document.querySelectorAll('input[name="colour"]').forEach((r) => (r.onchange = () => setTime(T)));

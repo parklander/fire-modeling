@@ -121,6 +121,23 @@ Open `/static/firewx.html?aoi=shilo`, or **Fire wx forecast ↗** from a point o
 
 The two sources can disagree, sometimes a lot (e.g. rain amounts on a frontal day), and seeing both is the point. A trend chart overlays FWI from both, FWI2025 peaks, BUI and precipitation. Cells are tinted by CWFIS danger class.
 
+## Satellite-detected fires (NASA FIRMS)
+
+The server polls NASA FIRMS (LANCE near-real-time) every 15 minutes for VIIRS (SNPP, NOAA-20, NOAA-21) and MODIS detections over Canada. It turns them into incidents and runs fire growth automatically for any incident near a base ([fireweather/hotspots.py](fireweather/hotspots.py)):
+
+1. **Persistent heat sources are excluded.** Once a day, 10 days of VIIRS detections are binned into ~375 m cells. Cells seen on 3 or more days, plus a 1 km buffer, are treated as industrial (refineries, oil sands, flares). That's typically about 45% of detections in October.
+2. **Low-confidence detections are dropped.** The rest are clustered into incidents: detections within 1.5 km and 48 h of each other.
+3. **Incidents within 50 km of an area in `aoi.json` are simulated.** The burned area at the latest pass is the detection footprints (VIIRS 375 m, MODIS about 1 km). Growth is forecast to 12 h past now with the latest complete RDPS run, as an established fire with no point-ignition build-up. A run is repeated when new detections join or a newer run is available. Detections on cropland or other non-fuel report "no burnable fuel" instead.
+4. **On the fire page:** the "Detected fires" list shows each incident's distance and base, number of detections, last pass, fire radiative power and forecast area. Click one to play its simulation, or ↻ to re-run it. The map shows 48 h of detections coloured by age (grey = persistent and excluded).
+
+Settings (sources, area, poll interval, clustering, base distance, forecast length) are `FIRMS_*` and related constants in [fireweather/config.py](fireweather/config.py).
+
+**MAP_KEY:** FIRMS requires a key (free, 5,000 transactions per 10 minutes; a poll uses 4, the daily persistence pull about 6). Put it in a `.env` file in the project root. `.env` is git-ignored, so the key never reaches GitHub:
+
+```
+FIRMS_MAP_KEY=your-key-here
+```
+
 ## Fire growth (`/fire`)
 
 The fire growth page is a separate page on the same server, using the same RDPS data. Open it at http://127.0.0.1:8000/fire, or with **Fire growth ↗** from a point in the weather viewer. Pick an area or click the map to place an ignition, choose a start time and duration, and run. The page shows:

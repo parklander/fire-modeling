@@ -1,7 +1,22 @@
 """Settings for the RDPS fire-weather viewer."""
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_dotenv(path):
+    """Minimal .env reader (KEY=value lines); real environment variables take precedence."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_dotenv(ROOT / ".env")
 DATA_DIR = ROOT / "data"
 RUNS_DIR = DATA_DIR / "runs"
 GRID_CACHE = DATA_DIR / "grid_map.npz"
@@ -137,6 +152,25 @@ CWFIS_SEED_RES = 0.1  # degrees
 # Where the CWFIS grids have no data, seed from CWFIS station codes (IDW of the 4 nearest)
 # within this distance; beyond it the startup defaults are used.
 CWFIS_STATION_MAX_KM = 150
+
+# NASA FIRMS active fire detections (LANCE NRT). The MAP_KEY comes from .env, never the repo.
+FIRMS_MAP_KEY = os.environ.get("FIRMS_MAP_KEY", "")
+FIRMS_API = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
+FIRMS_SOURCES = ("VIIRS_SNPP_NRT", "VIIRS_NOAA20_NRT", "VIIRS_NOAA21_NRT", "MODIS_NRT")
+FIRMS_BBOX = (-141.0, 41.5, -52.0, 70.0)  # west, south, east, north: Canada (plus border strip)
+FIRMS_POLL_MIN = 15                       # minutes between polls
+FIRMS_DAYS = 2                            # day range per poll (catches overnight passes)
+HOTSPOT_DIR = DATA_DIR / "hotspots"
+# Persistent heat sources (refineries, flares, smelters): 375 m cells with detections on
+# at least this many distinct days in the last 10 are excluded from incidents
+# (the detected pixel shifts between passes, hence the buffer).
+PERSISTENT_MIN_DAYS = 3
+PERSISTENT_BUFFER_KM = 1.0  # detections this close to a persistent cell are also excluded
+CLUSTER_KM = 1.5        # detections closer than this (and within CLUSTER_HOURS) form one incident
+CLUSTER_HOURS = 48
+INCIDENT_BASE_KM = 50   # auto-simulate incidents within this distance of an area of interest
+AUTO_SIM_HOURS_AHEAD = 12
+AUTO_SIM_MAX_AGE_H = 12  # only auto-simulate incidents detected within this many hours (older = likely out)
 
 # Display raster: Web Mercator, clipped to North America.
 BOUNDS = {"west": -170.0, "east": -50.0, "south": 24.0, "north": 83.0}

@@ -263,7 +263,14 @@ def _stage_bounds(duration_min):
 
 
 def simulate(store, run, lat, lon, start_utc, duration_h, radius_km=8.0, res_m=None, curing=None,
-             leaf="auto", unclassified="NF", gfl=0.35, ffmc0=None, dmc0=None, dc0=None):
+             leaf="auto", unclassified="NF", gfl=0.35, ffmc0=None, dmc0=None, dc0=None, ignitions=None):
+    """Grow a fire from a point (lat, lon), or from an existing burned area.
+
+    `ignitions`: optional list of (lat, lon, radius_m) footprints (e.g. satellite detections).
+    Burnable cells inside them start burned at t=0 and, as an established fire, spread
+    without the point-ignition acceleration. (lat, lon) then only centres the domain and
+    picks the cell used for the head-fire table.
+    """
     t_start = datetime.now()
     if res_m is None:
         res_m = 30 if radius_km <= 6 else 60 if radius_km <= 12 else 90 if radius_km <= 20 else 120
@@ -289,19 +296,40 @@ def simulate(store, run, lat, lon, start_utc, duration_h, radius_km=8.0, res_m=N
     if not (0 <= ir < h and 0 <= ic < w):
         raise ValueError("ignition outside the fuel domain")
     can_burn = ~np.isin(dom["fuel"], ("NF", "WA"))
-    snapped_m = 0.0
-    if not can_burn[ir, ic]:
-        rr, cc = np.nonzero(can_burn)
-        dd = np.hypot((rr - ir) * dom["dy"], (cc - ic) * dom["dx"])
-        if not dd.size or dd.min() > 300:
-            raise ValueError(f"no burnable fuel within 300 m of the ignition "
-                             f"({FUEL_LABELS.get(int(dom['codes'][ir, ic]), 'unknown')})")
-        k = int(dd.argmin())
-        ir, ic, snapped_m = int(rr[k]), int(cc[k]), float(dd[k])
-    ig_lat, ig_lon = float(dom["lat"][ir, ic]), float(dom["lon"][ir, ic])
-
     arrival = np.full(h * w, np.inf)
-    arrival[ir * w + ic] = 0.0
+    seeds = np.zeros((h, w), dtype=bool)
+    for f_lat, f_lon, f_r in ignitions or ():
+        fr, fc = (f_lat - dom["north"]) / dom["sy"], (f_lon - dom["west"]) / dom["sx"]
+        rr, cc = np.ogrid[:h, :w]
+        inside = np.hypot((rr + 0.5 - fr) * dom["dy"], (cc + 0.5 - fc) * dom["dx"]) <= max(f_r, dom["dx"], dom["dy"])
+        hit = inside & can_burn
+        if not hit.any():  # footprint on non-fuel: nearest burnable cell within 300 m
+            br, bc = np.nonzero(can_burn)
+            dd = np.hypot((br + 0.5 - fr) * dom["dy"], (bc + 0.5 - fc) * dom["dx"])
+            if dd.size and dd.min() <= 300:
+                hit[br[dd.argmin()], bc[dd.argmin()]] = True
+        seeds |= hit
+    if ignitions and not seeds.any():
+        raise ValueError("no burnable fuel at or near any detection footprint")
+    snapped_m = 0.0
+    if seeds.any():
+        # head-fire table cell: the seed nearest the given point
+        sr, sc = np.nonzero(seeds)
+        k = int(np.hypot((sr - ir) * dom["dy"], (sc - ic) * dom["dx"]).argmin())
+        ir, ic = int(sr[k]), int(sc[k])
+        arrival[seeds.ravel()] = 0.0
+    else:
+        if not can_burn[ir, ic]:
+            rr, cc = np.nonzero(can_burn)
+            dd = np.hypot((rr - ir) * dom["dy"], (cc - ic) * dom["dx"])
+            if not dd.size or dd.min() > 300:
+                raise ValueError(f"no burnable fuel within 300 m of the ignition "
+                                 f"({FUEL_LABELS.get(int(dom['codes'][ir, ic]), 'unknown')})")
+            k = int(dd.argmin())
+            ir, ic, snapped_m = int(rr[k]), int(cc[k]), float(dd[k])
+        arrival[ir * w + ic] = 0.0
+    established = bool(seeds.any())  # an existing fire doesn't need the point-ignition build-up
+    ig_lat, ig_lon = float(dom["lat"][ir, ic]), float(dom["lon"][ir, ic])
     direction = np.full(h * w, np.nan)  # azimuth the fire arrived travelling
     hfi = np.zeros(h * w)
     ftype = np.zeros(h * w, dtype=np.uint8)
@@ -323,13 +351,13 @@ def simulate(store, run, lat, lon, start_utc, duration_h, radius_km=8.0, res_m=N
         F = fbp_cache[wx["utc"]]
         if burnable_ign is None:
             burnable_ign = bool(F["burnable"][ir, ic])
-            if not burnable_ign:
+            if not burnable_ign and not established:  # an existing fire may still spread from other cells
                 raise ValueError(f"ignition is in non-burnable fuel ({FUEL_LABELS.get(int(dom['codes'][ir, ic]), 'unknown')})")
         # point-ignition acceleration (FBP Eq. 70 / 81), at the stage midpoint
         tm = (s0 + s1) / 2
         cfb = F["CFB"]
         alpha = np.where(np.isin(F["fuel"], fbp.ALPHA_FIXED), 0.115, 0.115 - 18.8 * cfb ** 2.5 * np.exp(-8 * cfb))
-        acc = 1 - np.exp(-alpha * tm)
+        acc = np.ones_like(alpha) if established else 1 - np.exp(-alpha * tm)
         R, B = F["ROS"] * acc, F["BROS"] * acc
         LB = (F["LB"] - 1) * acc + 1
         RAZ = F["RAZ"]
@@ -442,6 +470,7 @@ def simulate(store, run, lat, lon, start_utc, duration_h, radius_km=8.0, res_m=N
         "fuels": [{"code": c, "label": FUEL_LABELS.get(c, str(c)), "cells": n} for c, n in
                   sorted(fuels_present.items(), key=lambda t: -t[1])],
         "edge_hit": edge_hit,
+        "initial_ha": round(float(seeds.sum() * dom['dx'] * dom['dy'] / 1e4), 1) if established else 0.0,
         "runtime_s": round((datetime.now() - t_start).total_seconds(), 1),
     }
 

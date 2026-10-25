@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import amqp_listener, config, firemodel, firewx, fwi_engine, grid, ingest, national, report, smoke
+from . import amqp_listener, config, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, report, smoke
 
 log = logging.getLogger("server")
 
@@ -22,6 +22,22 @@ store = ingest.Store(bus)
 ingestor = ingest.Ingestor(store)
 engine = fwi_engine.FWIEngine(store)
 smoke_engine = smoke.SmokeEngine(store)
+
+
+def _incident_sim(run, ignitions, start, hours, center):
+    """Growth run for a detected fire: domain sized to the detections plus room to spread."""
+    lats = [f[0] for f in ignitions]; lons = [f[1] for f in ignitions]
+    extent_km = max(firemodel_extent_km(lats, lons), 1.0)
+    radius = min(max(8.0, extent_km + 6.0), 25.0)
+    return firemodel.simulate(store, run, center[0], center[1], start, hours, radius_km=radius, ignitions=ignitions)
+
+
+def firemodel_extent_km(lats, lons):
+    import math
+    return max(max(lats) - min(lats), (max(lons) - min(lons)) * math.cos(math.radians(sum(lats) / len(lats)))) * 111.32 / 2
+
+
+fires = hotspots.Hotspots(store, _incident_sim)
 _stop = threading.Event()
 _point_pool = ThreadPoolExecutor(8)
 
@@ -34,6 +50,8 @@ async def lifespan(app):
         threading.Thread(target=ingest.reconcile_loop, args=(ingestor, _stop), name="reconcile", daemon=True),
         threading.Thread(target=engine.loop, args=(_stop,), name="fwi", daemon=True),
         threading.Thread(target=smoke_engine.loop, args=(_stop,), name="smoke", daemon=True),
+        threading.Thread(target=fires.loop, args=(_stop, lambda: bus.publish({"type": "incidents"})),
+                         name="firms", daemon=True),
     ]
     for t in threads:
         t.start()
@@ -184,6 +202,37 @@ async def fire_weather_forecast(lat: float, lon: float, run: str | None = None,
 @app.get("/api/national")
 async def national_summary():
     return await asyncio.to_thread(national.build)
+
+
+@app.get("/api/hotspots")
+def hotspot_detections(hours: int = Query(48, ge=1, le=120)):
+    return {"status": fires.status, "detections": fires.detections_view(hours)}
+
+
+@app.get("/api/incidents")
+def incident_list():
+    return {"status": fires.status, "base_km": config.INCIDENT_BASE_KM, "max_age_h": config.AUTO_SIM_MAX_AGE_H,
+            "incidents": fires.incidents_view()}
+
+
+@app.get("/api/incidents/{iid}/sim")
+def incident_sim(iid: str):
+    p = config.HOTSPOT_DIR / f"sim_{iid}.json"
+    if not iid.isalnum() or not p.exists():
+        raise HTTPException(404, "no simulation for this incident yet")
+    return Response(p.read_bytes(), media_type="application/json")
+
+
+@app.post("/api/incidents/{iid}/simulate")
+async def incident_rerun(iid: str):
+    try:
+        summary, err = await asyncio.to_thread(fires.run_incident, iid)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    if err:
+        raise HTTPException(400, err)
+    bus.publish({"type": "incidents"})
+    return summary
 
 
 @app.get("/api/tz")

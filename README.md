@@ -84,6 +84,21 @@ Limitations, which are also printed on the report:
 - Stability, ventilation rating and smoke-settling categories are rule-of-thumb classifications from model fields (see `report.METHODS`).
 - The report is automated guidance for forecaster review.
 
+## National weekly summary
+
+Open `/static/national.html`, or **National ↗** in the weather map header. It's a one-page situational-awareness summary of every area in `aoi.json` for today through the last date CWFIS has published (about a week). It's built for a national reader such as the Canadian Forces Fire Marshal (CFFM). The page has:
+- status counts and the highest FWI;
+- key findings in words, e.g. "CFB Suffield: DC 425 or more Sun–Sat; Fire danger High Wed–Sat";
+- a map of Canada with each base coloured by status;
+- a base-by-day matrix grouped by province, with cells coloured by CWFIS fire danger rating and showing FWI plus noon wind and RH; BUI and DC are shown for today;
+- the criteria, CSV and print.
+
+Status for the period ([fireweather/national.py](fireweather/national.py) `CRITERIA`):
+- **Concern:** CWFIS danger Very High or Extreme, or FWI 30 or more, on any day.
+- **Watch:** danger High, FWI 20 or more, ISI 10 or more, BUI 60 or more, DC 425 or more, or wind 30 km/h or more with RH 30% or less.
+
+Where a base's point falls in a cell with no data (e.g. water), the nearest CWFIS cell within 5 km is used and its distance shown. The first build makes about 1,500 CWFIS requests, taking about 15 s; results are cached for 3 hours.
+
 ## Fire weather forecast report
 
 Open `/static/firewx.html?aoi=shilo`, or **Fire wx forecast ↗** from a point on the map or from the burn report. It's a printable daily outlook with a CSV export of every number (one row per day, `cwfis_*` and `rdps_*` columns). It draws on two independent sources ([fireweather/firewx.py](fireweather/firewx.py)):

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import amqp_listener, config, firemodel, firewx, fwi_engine, grid, ingest, report, smoke
+from . import amqp_listener, config, firemodel, firewx, fwi_engine, grid, ingest, national, report, smoke
 
 log = logging.getLogger("server")
 
@@ -179,6 +179,11 @@ async def fire_weather_forecast(lat: float, lon: float, run: str | None = None,
         return await asyncio.to_thread(firewx.build, store, lat, lon, run, 2, radius_km, curing, fbp)
     except (ValueError, LookupError) as e:
         raise HTTPException(400, str(e))
+
+
+@app.get("/api/national")
+async def national_summary():
+    return await asyncio.to_thread(national.build)
 
 
 @app.get("/api/tz")

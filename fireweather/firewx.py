@@ -31,7 +31,7 @@ CWFIS_VARS = ("temp", "rh", "ws", "wdir", "precip", "ffmc", "dmc", "dc", "isi", 
 FBP_VARS = ("hfi", "ros", "cfb", "sfc", "tfc", "ft", "fmc")
 FDR_LABELS = ["Low", "Moderate", "High", "Very High", "Extreme"]
 FT_LABELS = {1: "Surface", 2: "Intermittent crown", 3: "Crown"}
-_pool = ThreadPoolExecutor(10, thread_name_prefix="cwfis")
+_pool = ThreadPoolExecutor(16, thread_name_prefix="cwfis")
 _session = requests.Session()
 _cache, _cache_lock = {}, threading.Lock()
 
@@ -64,16 +64,25 @@ def cwfis_date_range():
         return None
 
 
+FALLBACK_M = 5000  # if the point's cell has no data (e.g. water), use the nearest valid cell within this
+
+
 def _cwfis_value(var, d, x, y):
+    """Value of a CWFIS daily grid at the point -> (value, km to the cell used) or (None, None).
+
+    Takes the cell containing the point; if that cell has no data, the nearest valid cell
+    within FALLBACK_M (not for FBP outputs, where no data means no fuel).
+    """
     import tifffile
     logging.getLogger("tifffile").setLevel(logging.ERROR)
+    pad = 1500 if var in FBP_VARS else FALLBACK_M
     r = _session.get(WCS, timeout=60, params=[
         ("service", "WCS"), ("version", "2.0.1"), ("request", "GetCoverage"),
         ("coverageId", f"public__{var}"), ("format", "image/geotiff"),
-        ("subset", f"E({x - 1500},{x + 1500})"), ("subset", f"N({y - 1500},{y + 1500})"),
+        ("subset", f"E({x - pad},{x + pad})"), ("subset", f"N({y - pad},{y + pad})"),
         ("subset", f'time("{d.isoformat()}T00:00:00.000Z")')])
     if r.status_code != 200 or not r.content[:2] in (b"II", b"MM"):
-        return None
+        return None, None
     with tifffile.TiffFile(io.BytesIO(r.content)) as t:
         page = t.pages[0]
         a = page.asarray().astype(float)
@@ -84,30 +93,44 @@ def _cwfis_value(var, d, x, y):
         else:
             scale, tie = tags["ModelPixelScaleTag"].value, tags["ModelTiepointTag"].value
             x0, sx, y0, sy = tie[3], scale[0], tie[4], -scale[1]
-    # the pixel that contains the point
+    valid = np.isfinite(a) & (a > -1e5)
+    if var in FBP_VARS:
+        valid &= a > -100  # CWFIS marks non-fuel cells (water, agriculture, urban) with -101 in the FBP grids
+    # pixel centres relative to the point, in metres
+    cx = x0 + (np.arange(a.shape[1]) + 0.5) * sx - x
+    cy = y0 + (np.arange(a.shape[0]) + 0.5) * sy - y
+    dist = np.hypot(cx[None, :], cy[:, None])
     row = min(max(int((y - y0) // sy), 0), a.shape[0] - 1)
     col = min(max(int((x - x0) // sx), 0), a.shape[1] - 1)
-    v = float(a[row, col])
-    if not math.isfinite(v) or v < -1e5:
-        return None
-    if var in FBP_VARS and v <= -100:
-        return None  # CWFIS marks non-fuel cells (water, agriculture, urban) with -101 in the FBP grids
+    if valid[row, col]:
+        v, km = float(a[row, col]), 0.0
+    elif var not in FBP_VARS and valid.any():
+        k = np.unravel_index(np.argmin(np.where(valid, dist, np.inf)), a.shape)
+        v, km = float(a[k]), float(dist[k]) / 1000
+    else:
+        return None, None
     if var == "wdir":
         v %= 360  # CWFIS stores -180..180, direction the wind blows from
-    return round(v, 2)
+    return round(v, 2), round(km, 1)
 
 
-def cwfis_daily(lat, lon, first, last):
-    """{date: {var: value}} from the CWFIS dated grids at the point (2 km cell)."""
+def cwfis_daily(lat, lon, first, last, variables=CWFIS_VARS):
+    """{date: {var: value}} from the CWFIS dated grids at the point (2 km cell).
+
+    Each row also carries `cell_km`: distance to the cell used when the point's own cell
+    had no FWI data (0 when it did).
+    """
     from pyproj import Transformer
     x, y = Transformer.from_crs(4326, 3978, always_xy=True).transform(lon, lat)
     days = [first + timedelta(days=k) for k in range((last - first).days + 1)]
-    jobs = [(v, d) for d in days for v in CWFIS_VARS]
+    jobs = [(v, d) for d in days for v in variables]
     key = lambda v, d: f"cwfis:{lat:.3f},{lon:.3f}:{v}:{d}"
-    vals = _pool.map(lambda j: _cached(key(*j), 3600, lambda: _cwfis_value(j[0], j[1], x, y)), jobs)
+    vals = _pool.map(lambda j: _cached(key(*j), 3 * 3600, lambda: _cwfis_value(j[0], j[1], x, y)), jobs)
     out = {d: {} for d in days}
-    for (v, d), val in zip(jobs, vals):
+    for (v, d), (val, km) in zip(jobs, vals):
         out[d][v] = val
+        if v == "fwi":
+            out[d]["cell_km"] = km
     for d, row in out.items():
         row["fdr_label"] = FDR_LABELS[int(row["fdr"])] if row.get("fdr") is not None and 0 <= row["fdr"] <= 4 else None
         row["ft_label"] = FT_LABELS.get(int(row["ft"])) if row.get("ft") else None

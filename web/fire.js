@@ -393,13 +393,108 @@
     $("inc-list").innerHTML = list.length ? list.slice(0, 60).map((i) => `
       <div class="inc ${i.id === activeIncident ? "active" : ""} ${i.fresh ? "" : "stale"}" data-id="${i.id}">
         <div class="t"><span>${n(i.distance_km, 0)} km from ${esc(i.nearest_area)}</span>${i.near_base ? `<button data-rerun="1" title="Re-run with the latest data">↻ re-run</button>` : ""}</div>
-        <div class="m">${i.detections} detection${i.detections > 1 ? "s" : ""} · last ${ago(i.last_seen)} · FRP ${n(i.max_frp, 1)} MW</div>
+        <div class="m">${i.detections} detection${i.detections > 1 ? "s" : ""}${i.passes > 1 ? ` in ${i.passes} passes` : ""} · last ${ago(i.last_seen)} · FRP ${n(i.max_frp, 1)} MW</div>
         <div class="r ${i.sim_error ? "err" : ""}">${!i.fresh && i.near_base ? `No detection in the last ${d.max_age_h} h, probably out; not simulated automatically${i.sim ? " (an earlier run is still viewable)" : ""}`
           : i.sim_error ? esc(i.sim_error)
           : i.sim ? `Forecast ${n(i.sim.area_ha, i.sim.area_ha < 10 ? 1 : 0)} ha by +${i.sim.hours} h if unsuppressed · head ${n(i.sim.head_ros_max, 1)} m/min`
           : i.near_base ? "Simulation pending…" : `Not simulated (over ${d.base_km} km from a base)`}</div>
       </div>`).join("")
       : `<div class="sub">No fires detected within ${d.base_km} km of a base in the last 48 h.</div>`;
+  }
+
+  // ---- satellite progression: an incident's detections pass by pass ---------------------
+  const progLayer = L.layerGroup().addTo(map);
+  let PROG = null, progK = 0, progTimer = null, progTZ = "UTC";
+  const progTime = (iso) => new Date(iso).toLocaleString("en-CA", { timeZone: progTZ, weekday: "short", month: "short",
+    day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false, timeZoneName: "short" });
+  // union of the detection pixels up to each pass, on a 30 m grid (ha)
+  function footprintAreas(passes) {
+    const kx = 111320 * Math.cos(PROG.lat * Math.PI / 180), ky = 110540, cell = 30, seen = new Set();
+    return passes.map((p) => {
+      for (const d of p.detections) {
+        const cx = (d.lon - PROG.lon) * kx, cy = (d.lat - PROG.lat) * ky, r2 = d.footprint_m * d.footprint_m;
+        for (let i = Math.floor((cx - d.footprint_m) / cell); i <= Math.ceil((cx + d.footprint_m) / cell); i++)
+          for (let j = Math.floor((cy - d.footprint_m) / cell); j <= Math.ceil((cy + d.footprint_m) / cell); j++) {
+            const dx = i * cell - cx, dy = j * cell - cy;
+            if (dx * dx + dy * dy <= r2) seen.add(i * 100003 + j);
+          }
+      }
+      return seen.size * cell * cell / 1e4;
+    });
+  }
+  // older passes yellow, recent orange, the selected pass red
+  const passColour = (i, k) => (i === k ? "#ff3b1f" : `hsl(${45 - 20 * (i / Math.max(1, k))}, 100%, ${62 - 8 * (i / Math.max(1, k))}%)`);
+  function drawProgChart() {
+    const P = PROG.passes, svg = $("prog-chart"), W = svg.clientWidth || 360, H = 120, padB = 18, padT = 16;
+    const max = Math.max(...P.map((p) => p.frp_sum), 1), step = (W - 8) / P.length, bw = Math.max(2, Math.min(24, step - 3));
+    let h = `<line x1="0" x2="${W}" y1="${H - padB}" y2="${H - padB}" stroke="rgba(255,255,255,.2)"/>`
+      + `<text x="2" y="10">Total FRP per pass (MW), max ${n(max)}</text>`;
+    let lastDay = "";
+    P.forEach((p, i) => {
+      const bh = Math.max(1.5, (H - padB - padT) * p.frp_sum / max), x = 4 + i * step + (step - bw) / 2;
+      const fill = i > progK ? "rgba(255,255,255,.14)" : passColour(i, progK);
+      h += `<rect class="bar" data-i="${i}" x="${x.toFixed(1)}" y="${(H - padB - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2" fill="${fill}">`
+        + `<title>${esc(progTime(p.time))} · ${esc(p.sensor)} · ${p.count} detection${p.count > 1 ? "s" : ""} · ${n(p.frp_sum, 1)} MW</title></rect>`;
+      const day = new Date(p.time).toLocaleDateString("en-CA", { timeZone: progTZ, month: "short", day: "numeric" });
+      if (day !== lastDay) { h += `<text x="${x.toFixed(1)}" y="${H - 4}">${day}</text>`; lastDay = day; }
+    });
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.innerHTML = h;
+  }
+  function setPass(k) {
+    const P = PROG.passes;
+    progK = Math.max(0, Math.min(P.length - 1, k));
+    $("prog-slider").value = progK;
+    progLayer.clearLayers();
+    for (let i = 0; i <= progK; i++) {
+      const cur = i === progK;
+      for (const d of P[i].detections) {
+        L.circle([d.lat, d.lon], { radius: d.footprint_m, weight: cur ? 2 : 1, color: cur ? "#fff" : passColour(i, progK),
+          opacity: cur ? 0.9 : 0.5, fillColor: passColour(i, progK), fillOpacity: cur ? 0.45 : 0.18, interactive: cur })
+          .bindTooltip(`${esc(progTime(P[i].time))} · ${esc(P[i].sensor)} · FRP ${n(d.frp, 1)} MW`).addTo(progLayer);
+      }
+    }
+    const p = P[progK], A = PROG.areas, prev = progK ? A[progK - 1] : 0;
+    const gap = progK ? (Date.parse(p.time) - Date.parse(P[progK - 1].time)) / 3600e3 : null;
+    $("prog-label").textContent = `Pass ${progK + 1} of ${P.length} · ${progTime(p.time)} · ${p.sensor}`;
+    $("prog-cards").innerHTML = [
+      [`${p.count}`, "Detections this pass"],
+      [`${n(p.frp_sum, 1)} MW`, `Total FRP (max ${n(p.frp_max, 1)})`],
+      [gap == null ? "first" : gap < 1 ? `${Math.round(gap * 60)} min` : `${n(gap, 1)} h`, "Since previous pass"],
+      [`${n(A[progK], A[progK] < 100 ? 1 : 0)} ha`, "Pixel area so far"],
+      [`+${n(A[progK] - prev, 1)} ha`, "New pixel area"],
+      [`${n((Date.parse(p.time) - Date.parse(P[0].time)) / 3600e3, 1)} h`, "Since first detection"],
+    ].map(([v, k]) => `<div class="card"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("");
+    drawProgChart();
+  }
+  function progStop() { clearInterval(progTimer); progTimer = null; $("prog-play").classList.remove("on"); $("prog-play").textContent = "▶"; }
+  $("prog-play").onclick = () => {
+    if (progTimer) return progStop();
+    if (progK >= PROG.passes.length - 1) setPass(0);
+    $("prog-play").classList.add("on"); $("prog-play").textContent = "❚❚";
+    progTimer = setInterval(() => (progK >= PROG.passes.length - 1 ? progStop() : setPass(progK + 1)), 1200);
+  };
+  $("prog-slider").oninput = (e) => { progStop(); setPass(+e.target.value); };
+  $("prog-chart").onclick = (e) => { const i = e.target.dataset?.i; if (i != null) { progStop(); setPass(+i); } };
+  $("prog-close").onclick = () => { progStop(); PROG = null; progLayer.clearLayers(); $("prog").hidden = true; };
+  async function showProgression(inc, fit) {
+    progStop();
+    let d, tz;
+    try {
+      [d, tz] = await Promise.all([fetch(`/api/incidents/${inc.id}/progression`).then((r) => (r.ok ? r.json() : null)),
+        fetch(`/api/tz?lat=${inc.lat}&lon=${inc.lon}`).then((r) => r.json()).catch(() => null)]);
+    } catch (_) { return; }
+    if (!d?.passes.length) return;
+    progTZ = tz?.timezone || "UTC";
+    PROG = d;
+    PROG.areas = footprintAreas(d.passes);
+    $("prog").hidden = false;
+    const P = d.passes;
+    $("prog-sub").textContent = `${n(d.distance_km, 0)} km from ${d.nearest_area} · ${P.length} pass${P.length > 1 ? "es" : ""}, `
+      + `${P.reduce((s, p) => s + p.count, 0)} detections · ${progTime(P[0].time)} to ${progTime(P[P.length - 1].time)}`;
+    $("prog-slider").max = P.length - 1;
+    setPass(P.length - 1);
+    if (fit) map.fitBounds(L.featureGroup(progLayer.getLayers()).getBounds().pad(0.6), { maxZoom: 14 });
   }
 
   $("inc-list").onclick = async (e) => {
@@ -409,6 +504,7 @@
     if (!inc) return;
     stop();
     map.setView([inc.lat, inc.lon], 12);
+    showProgression(inc, !inc.sim && !e.target.dataset.rerun);
     if (e.target.dataset.rerun) {
       $("status").className = "status";
       $("status").textContent = "Re-running the incident simulation…";

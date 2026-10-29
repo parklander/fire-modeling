@@ -66,6 +66,19 @@ def _fetch(source, day_range, start=None):
     return out
 
 
+def _group_passes(history):
+    """Detections [id, time, lat, lon, frp, sensor, footprint_m] -> satellite passes (same sensor, within 10 min)."""
+    passes = []
+    for _id, t, lat, lon, frp, sensor, fp in history:
+        ts = datetime.fromisoformat(t)
+        p = next((p for p in passes if p["sensor"] == sensor and abs((ts - p["_t"]).total_seconds()) <= 600), None)
+        if not p:
+            p = {"sensor": sensor, "time": t, "_t": ts, "detections": []}
+            passes.append(p)
+        p["detections"].append({"lat": lat, "lon": lon, "frp": frp, "footprint_m": fp})
+    return sorted(passes, key=lambda p: p["_t"])
+
+
 class Hotspots:
     def __init__(self, store, simulate):
         self.store = store
@@ -171,20 +184,27 @@ class Hotspots:
             members.sort(key=lambda d: d["time"])
             ids = {d["id"] for d in members}
             # keep the id of an existing incident that shares detections, else a hash of the first
-            prev = next((inc for inc in self.incidents.values() if ids & set(inc["detection_ids"])), None)
+            prevs = [inc for inc in self.incidents.values() if ids & set(inc["detection_ids"])]
+            prev = prevs[0] if prevs else None
             iid = prev["id"] if prev else hashlib.sha1(members[0]["id"].encode()).hexdigest()[:10]
+            # every detection the incident has had, including passes older than the FIRMS window (for progression)
+            hist = {h[0]: h for p in prevs for h in p.get("history", [])}
+            for d in members:
+                hist[d["id"]] = [d["id"], d["time"], d["lat"], d["lon"], round(d["frp"], 1), d["sensor"], d["footprint_m"]]
+            history = sorted(hist.values(), key=lambda h: h[1])
             clat = float(np.mean([d["lat"] for d in members])); clon = float(np.mean([d["lon"] for d in members]))
             dist = _km(clat, clon, alat, alon)
             k = int(np.argmin(dist))
             inc = {
                 "id": iid, "lat": round(clat, 5), "lon": round(clon, 5),
-                "first_seen": members[0]["time"], "last_seen": members[-1]["time"],
+                "first_seen": history[0][1], "last_seen": members[-1]["time"],
                 "detections": len(members), "detection_ids": sorted(ids),
                 "max_frp": round(max(d["frp"] for d in members), 1),
                 "sensors": sorted({d["sensor"] for d in members}),
                 "nearest_area": areas[k]["name"], "nearest_area_id": areas[k]["id"], "distance_km": round(float(dist[k]), 1),
                 "near_base": bool(dist[k] <= config.INCIDENT_BASE_KM),
                 "footprints": [[d["lat"], d["lon"], d["footprint_m"]] for d in members],
+                "history": history,
             }
             if prev:  # carry simulation bookkeeping forward
                 for key in ("sim", "sim_run", "sim_detections", "sim_error", "sim_at"):
@@ -283,9 +303,25 @@ class Hotspots:
             return [{k: d[k] for k in ("lat", "lon", "time", "sensor", "frp", "confidence", "persistent", "low_conf", "footprint_m")}
                     | {"incident": inc_of.get(d["id"])} for d in self.detections if d["time"] >= cutoff]
 
+    def progression(self, iid):
+        """An incident's detections grouped into satellite passes (one satellite, detections within 10 min)."""
+        with self.lock:
+            inc = self.incidents.get(iid)
+            hist = list(inc.get("history", [])) if inc else None
+        if inc is None:
+            raise LookupError("unknown incident")
+        out = []
+        for p in _group_passes(hist):
+            frps = [d["frp"] for d in p["detections"]]
+            out.append({"time": p["time"], "sensor": p["sensor"], "count": len(frps),
+                        "frp_sum": round(sum(frps), 1), "frp_max": round(max(frps), 1), "detections": p["detections"]})
+        return {"id": iid, "lat": inc["lat"], "lon": inc["lon"], "nearest_area": inc["nearest_area"],
+                "distance_km": inc["distance_km"], "passes": out}
+
     def incidents_view(self):
         with self.lock:
-            out = [{k: v for k, v in i.items() if k not in ("detection_ids", "footprints")} | {"fresh": self._fresh(i)}
+            out = [{k: v for k, v in i.items() if k not in ("detection_ids", "footprints", "history")}
+                   | {"fresh": self._fresh(i), "passes": len(_group_passes(i.get("history", [])))}
                    for i in self.incidents.values()]
         # near-base and recently detected first
         return sorted(out, key=lambda i: (not i["near_base"], not i["fresh"], i["distance_km"]))

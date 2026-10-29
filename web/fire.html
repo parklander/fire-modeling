@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FBP Fire Growth</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="/static/fire.css?v=3">
+<link rel="stylesheet" href="/static/fire.css?v=4">
 </head>
 <body>
 <aside id="panel">
@@ -27,6 +27,20 @@
       <label><input type="checkbox" id="show-hotspots" checked> Satellite detections (48 h)</label>
       <label><input type="checkbox" id="show-all-inc"> All incidents</label>
     </div>
+  </section>
+
+  <section id="prog" class="prog" hidden>
+    <div class="inc-head"><b>Satellite progression</b><button class="x" id="prog-close" aria-label="Close progression">×</button></div>
+    <div class="sub" id="prog-sub"></div>
+    <svg id="prog-chart" role="img" aria-label="Fire radiative power per satellite pass"></svg>
+    <div class="timebar">
+      <button id="prog-play" class="play" aria-label="Play passes">▶</button>
+      <input type="range" id="prog-slider" min="0" max="0" step="1" value="0" aria-label="Satellite pass">
+    </div>
+    <div class="tlabel"><span id="prog-label" class="mono"></span></div>
+    <div class="cards" id="prog-cards"></div>
+    <div class="sub">Circles are detection pixels (VIIRS 375 m, MODIS ~1 km), not a perimeter: the area overstates small fires,
+      positions shift ~100–200 m between passes, and there are few passes between about 05:00 and 13:00 local.</div>
   </section>
 
   <section class="controls">
@@ -100,6 +114,6 @@
 <script src="https://cdn.jsdelivr.net/npm/d3-array@3.2.4/dist/d3-array.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3-contour@4.0.2/dist/d3-contour.min.js"></script>
 <script src="/static/windlayer.js?v=1"></script>
-<script src="/static/fire.js?v=9"></script>
+<script src="/static/fire.js?v=10"></script>
 </body>
 </html>

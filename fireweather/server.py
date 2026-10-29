@@ -371,6 +371,15 @@ def incident_sim(iid: str):
     return Response(p.read_bytes(), media_type="application/json")
 
 
+@app.get("/api/incidents/{iid}/progression")
+def incident_progression(iid: str):
+    """An incident's satellite detections grouped by pass, for the progression view on the fire page."""
+    try:
+        return fires.progression(iid)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
 @app.post("/api/incidents/{iid}/simulate")
 async def incident_rerun(iid: str):
     try:

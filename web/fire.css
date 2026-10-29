@@ -97,6 +97,9 @@ td .ft { display: inline-block; min-width: 14px; text-align: center; border-radi
 .inc .r.err { color: #ffb3ab; }
 .inc button { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 5px; font: inherit; font-size: 11px; padding: 1px 6px; cursor: pointer; }
 .inc button:hover { color: var(--fg); }
+#flog summary { padding: 2px 0; }
+#flog-list { display: grid; gap: 6px; max-height: 240px; overflow-y: auto; margin-top: 6px; }
+a.link.small { font-size: 11.5px; padding: 2px 7px; margin-left: auto; }
 .prog { border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
 .prog button.x { background: none; border: 0; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
 #prog-chart { width: 100%; height: 120px; display: block; }

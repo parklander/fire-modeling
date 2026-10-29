@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FBP Fire Growth</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="/static/fire.css?v=4">
+<link rel="stylesheet" href="/static/fire.css?v=5">
 </head>
 <body>
 <aside id="panel">
@@ -27,6 +27,15 @@
       <label><input type="checkbox" id="show-hotspots" checked> Satellite detections (48 h)</label>
       <label><input type="checkbox" id="show-all-inc"> All incidents</label>
     </div>
+    <details id="flog">
+      <summary><b>Fire log</b> <span class="sub" id="flog-area"></span></summary>
+      <div class="sub" id="flog-note"></div>
+      <div class="layer-toggle">
+        <label><input type="checkbox" id="flog-inside"> Inside the boundary only</label>
+        <a class="link small" id="flog-csv" href="#" download>CSV ↓</a>
+      </div>
+      <div id="flog-list"></div>
+    </details>
   </section>
 
   <section id="prog" class="prog" hidden>
@@ -114,6 +123,6 @@
 <script src="https://cdn.jsdelivr.net/npm/d3-array@3.2.4/dist/d3-array.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3-contour@4.0.2/dist/d3-contour.min.js"></script>
 <script src="/static/windlayer.js?v=1"></script>
-<script src="/static/fire.js?v=10"></script>
+<script src="/static/fire.js?v=11"></script>
 </body>
 </html>

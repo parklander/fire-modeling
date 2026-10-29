@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import alerts, amqp_listener, aoi, config, goes, firealerts, frontalerts, fronts, frontwatch, mailer, mbwx, precip, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, report, smoke
+from . import alerts, amqp_listener, aoi, config, goes, firealerts, firelog, frontalerts, fronts, frontwatch, mailer, mbwx, precip, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, report, smoke
 
 log = logging.getLogger("server")
 
@@ -344,11 +344,51 @@ def hotspot_detections(hours: int = Query(48, ge=1, le=120)):
 
 
 def _check_fire_alerts():
+    """After each FIRMS poll (and when areas change): log detections at the areas, then check the alerts."""
+    dets = fires.snapshot()
     try:
-        fire_alerts.check(fires.snapshot())
+        firelog.record(dets)
+    except Exception:
+        logging.getLogger("firelog").exception("fire log failed")
+    try:
+        fire_alerts.check(dets)
     except Exception:
         logging.getLogger("firealerts").exception("fire alert check failed")
     bus.publish({"type": "firealerts"})
+
+
+@app.get("/api/firelog/{aoi_id}/episodes")
+def fire_log_episodes(aoi_id: str, inside_only: bool = False):
+    """Logged fire episodes at an area (post-fire review), newest first."""
+    return {"aoi": aoi_id, "buffer_km": firelog.LOG_BUFFER_KM, "radius_km": firelog.LOG_RADIUS_KM,
+            "episodes": firelog.episodes(aoi_id, inside_only)}
+
+
+@app.get("/api/firelog/{aoi_id}/passes")
+def fire_log_passes(aoi_id: str, start: str, end: str, inside_only: bool = False, include_low_conf: bool = True):
+    """Logged detections at an area between start and end (ISO times), grouped into satellite passes."""
+    return {"aoi": aoi_id, "passes": firelog.passes(aoi_id, start, end, inside_only, include_low_conf=include_low_conf)}
+
+
+@app.get("/api/firelog/{aoi_id}/detections.csv")
+def fire_log_csv(aoi_id: str, start: str = "", end: str = "9999"):
+    """Every logged detection at an area as CSV (for GIS), optionally between start and end."""
+    import csv, io
+    db = firelog.connect()
+    try:
+        rows = db.execute("SELECT * FROM detections WHERE aoi = ? AND time >= ? AND time <= ? ORDER BY time",
+                          (aoi_id, start, end)).fetchall()
+    finally:
+        db.close()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    cols = ["time", "lat", "lon", "frp", "sensor", "source", "confidence", "daynight", "footprint_m", "low_conf",
+            "persistent", "inside", "dist_km", "id"]
+    w.writerow(cols)
+    for r in rows:
+        w.writerow([r[c] for c in cols])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="fire-detections-{aoi_id}.csv"'})
 
 
 @app.get("/api/firealerts")

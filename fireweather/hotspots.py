@@ -67,15 +67,16 @@ def _fetch(source, day_range, start=None):
 
 
 def _group_passes(history):
-    """Detections [id, time, lat, lon, frp, sensor, footprint_m] -> satellite passes (same sensor, within 10 min)."""
+    """Detections [id, time, lat, lon, frp, sensor, footprint_m, (flags)] -> satellite passes (same sensor, within 10 min)."""
     passes = []
-    for _id, t, lat, lon, frp, sensor, fp in history:
+    for h in history:
+        _id, t, lat, lon, frp, sensor, fp = h[:7]
         ts = datetime.fromisoformat(t)
         p = next((p for p in passes if p["sensor"] == sensor and abs((ts - p["_t"]).total_seconds()) <= 600), None)
         if not p:
             p = {"sensor": sensor, "time": t, "_t": ts, "detections": []}
             passes.append(p)
-        p["detections"].append({"lat": lat, "lon": lon, "frp": frp, "footprint_m": fp})
+        p["detections"].append({"lat": lat, "lon": lon, "frp": frp, "footprint_m": fp} | (h[7] if len(h) > 7 else {}))
     return sorted(passes, key=lambda p: p["_t"])
 
 

@@ -477,25 +477,61 @@
   $("prog-slider").oninput = (e) => { progStop(); setPass(+e.target.value); };
   $("prog-chart").onclick = (e) => { const i = e.target.dataset?.i; if (i != null) { progStop(); setPass(+i); } };
   $("prog-close").onclick = () => { progStop(); PROG = null; progLayer.clearLayers(); $("prog").hidden = true; };
-  async function showProgression(inc, fit) {
+  // url returns {passes: [...]}; where: the subtitle's lead ("19 km from CFB Gagetown")
+  async function showProgression(url, lat, lon, where, fit) {
     progStop();
     let d, tz;
     try {
-      [d, tz] = await Promise.all([fetch(`/api/incidents/${inc.id}/progression`).then((r) => (r.ok ? r.json() : null)),
-        fetch(`/api/tz?lat=${inc.lat}&lon=${inc.lon}`).then((r) => r.json()).catch(() => null)]);
+      [d, tz] = await Promise.all([fetch(url).then((r) => (r.ok ? r.json() : null)),
+        fetch(`/api/tz?lat=${lat}&lon=${lon}`).then((r) => r.json()).catch(() => null)]);
     } catch (_) { return; }
     if (!d?.passes.length) return;
     progTZ = tz?.timezone || "UTC";
-    PROG = d;
+    PROG = { lat, lon, passes: d.passes };
     PROG.areas = footprintAreas(d.passes);
     $("prog").hidden = false;
     const P = d.passes;
-    $("prog-sub").textContent = `${n(d.distance_km, 0)} km from ${d.nearest_area} · ${P.length} pass${P.length > 1 ? "es" : ""}, `
+    $("prog-sub").textContent = `${where} · ${P.length} pass${P.length > 1 ? "es" : ""}, `
       + `${P.reduce((s, p) => s + p.count, 0)} detections · ${progTime(P[0].time)} to ${progTime(P[P.length - 1].time)}`;
     $("prog-slider").max = P.length - 1;
     setPass(P.length - 1);
     if (fit) map.fitBounds(L.featureGroup(progLayer.getLayers()).getBounds().pad(0.6), { maxZoom: 14 });
   }
+
+  // ---- fire log: every detection logged at the selected area, grouped into episodes, for post-fire review ----
+  let FLOG = [];
+  async function loadFireLog() {
+    const a = aoiData.areas.find((x) => x.id === $("aoi").value);
+    if (!a) return;
+    $("flog-area").textContent = `· ${a.name}`;
+    $("flog-csv").href = `/api/firelog/${encodeURIComponent(a.id)}/detections.csv`;
+    let d;
+    try { d = await (await fetch(`/api/firelog/${encodeURIComponent(a.id)}/episodes?inside_only=${$("flog-inside").checked}`)).json(); }
+    catch (_) { $("flog-list").innerHTML = `<div class="sub">Fire log unavailable.</div>`; return; }
+    FLOG = d.episodes;
+    $("flog-note").textContent = a.boundary ? `Detections inside the boundary or within ${d.buffer_km} km of it, logged after every FIRMS poll since logging began.`
+      : `This area has no drawn boundary: detections within ${d.radius_km} km of its point are logged. Draw a boundary in the area editor.`;
+    const tz = await fetch(`/api/tz?lat=${a.lat}&lon=${a.lon}`).then((r) => r.json()).then((x) => x.timezone).catch(() => "UTC");
+    const day = (iso) => new Date(iso).toLocaleDateString("en-CA", { timeZone: tz, year: "numeric", month: "short", day: "numeric" });
+    $("flog-list").innerHTML = FLOG.length ? FLOG.map((e, i) => `
+      <div class="inc" data-i="${i}">
+        <div class="t"><span>${day(e.start)}${day(e.end) !== day(e.start) ? ` – ${day(e.end)}` : ""}</span></div>
+        <div class="m">${e.count} detection${e.count > 1 ? "s" : ""}${a.boundary ? `, ${e.inside} inside the boundary` : ""} · max FRP ${n(e.max_frp, 1)} MW${e.low_conf ? ` · ${e.low_conf} low confidence` : ""}</div>
+      </div>`).join("") : `<div class="sub">No fire detections logged at this area yet.</div>`;
+  }
+  $("flog-list").onclick = (e) => {
+    const el = e.target.closest(".inc");
+    if (!el) return;
+    const ep = FLOG[+el.dataset.i], a = aoiData.areas.find((x) => x.id === $("aoi").value);
+    $("flog-list").querySelectorAll(".inc").forEach((x) => x.classList.toggle("active", x === el));
+    // pad by an hour either side so the first and last passes are whole
+    const pad = (iso, h) => new Date(Date.parse(iso) + h * 3600e3).toISOString();
+    showProgression(`/api/firelog/${encodeURIComponent(a.id)}/passes?start=${encodeURIComponent(pad(ep.start, -1))}`
+      + `&end=${encodeURIComponent(pad(ep.end, 1))}&inside_only=${$("flog-inside").checked}`, a.lat, a.lon, `Fire log · ${a.name}`, true);
+  };
+  $("flog-inside").onchange = loadFireLog;
+  $("flog").ontoggle = () => $("flog").open && loadFireLog();
+  $("aoi").addEventListener("change", () => $("flog").open && loadFireLog());
 
   $("inc-list").onclick = async (e) => {
     const cardEl = e.target.closest(".inc");
@@ -504,7 +540,8 @@
     if (!inc) return;
     stop();
     map.setView([inc.lat, inc.lon], 12);
-    showProgression(inc, !inc.sim && !e.target.dataset.rerun);
+    showProgression(`/api/incidents/${inc.id}/progression`, inc.lat, inc.lon, `${n(inc.distance_km, 0)} km from ${inc.nearest_area}`,
+      !inc.sim && !e.target.dataset.rerun);
     if (e.target.dataset.rerun) {
       $("status").className = "status";
       $("status").textContent = "Re-running the incident simulation…";

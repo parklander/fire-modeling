@@ -43,9 +43,9 @@ def _km(lat1, lon1, lat2, lon2):
     return math.hypot((lat2 - lat1) * 111.2, (lon2 - lon1) * 111.32 * math.cos(math.radians((lat1 + lat2) / 2)))
 
 
-def record(detections):
-    """Log detections at the areas of interest. Returns the number of new rows."""
-    areas = json.loads(config.AOI_FILE.read_text(encoding="utf-8"))["areas"]
+def record(detections, only=None):
+    """Log detections at the areas of interest (or just the area ids in only). Returns the number of new rows."""
+    areas = [a for a in json.loads(config.AOI_FILE.read_text(encoding="utf-8"))["areas"] if only is None or a["id"] in only]
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rows = []
     for a in areas:
@@ -134,7 +134,7 @@ def passes(aoi, start, end, inside_only=False, include_persistent=False, include
             for r in rows]
     out = []
     for p in _group_passes(hist):
-        frps = [d["frp"] for d in p["detections"]]
+        frps = [d["frp"] or 0 for d in p["detections"]]  # Landsat has no FRP
         out.append({"time": p["time"], "sensor": p["sensor"], "count": len(frps), "frp_sum": round(sum(frps), 1),
                     "frp_max": round(max(frps), 1), "detections": p["detections"]})
     return out

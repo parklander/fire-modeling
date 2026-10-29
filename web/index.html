@@ -5,11 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RDPS Fire Weather</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="/static/style.css?v=7">
+<link rel="stylesheet" href="/static/style.css?v=15">
 </head>
 <body>
 <div id="map"></div>
 <canvas id="arrows"></canvas>
+<canvas id="synoptic" hidden></canvas>
 
 <header class="panel" id="top">
   <div class="brand">
@@ -28,8 +29,11 @@
         <option value="off">Off</option>
       </select>
     </label>
+    <label class="chk" title="Isobars and H/L centres (RDPS sea-level pressure) with WPC surface fronts, over any layer"><input type="checkbox" id="synoptic-on"> Synoptic</label>
+    <button class="hdr-link key-btn" id="syn-key-btn" type="button" title="What the isobars, H/L and front symbols mean" aria-expanded="false" hidden>Key</button>
     <label class="opac">Opacity <input type="range" id="opacity" min="0.2" max="1" step="0.05" value="0.75"></label>
     <select id="run-select" title="Model run"></select>
+    <button class="hdr-link alert-chip" id="alert-chip" type="button" title="ECCC public weather alerts at the bases">Alerts</button>
     <a class="hdr-link" href="/static/national.html" target="_blank" rel="noopener" title="Weekly fire weather summary for all bases">National ↗</a>
   </div>
 </header>
@@ -38,26 +42,78 @@
 
 <div class="panel" id="banner" hidden></div>
 
+<div class="panel" id="alerts" hidden></div>
+
+<!-- synoptic chart key: symbols drawn as on the map (synoptic.js colours and sides) -->
+<aside class="panel" id="syn-key" hidden aria-label="Synoptic chart key">
+  <div class="sk-head"><b>Reading the synoptic overlay</b><button class="icon" id="syn-key-close" aria-label="Close">×</button></div>
+  <div class="sk-row">
+    <svg viewBox="0 0 120 26" aria-hidden="true"><path d="M4 18 C40 6 80 6 116 18" fill="none" stroke="#e8edf2" stroke-width="1.4"/><text x="60" y="11" fill="#fff" font-size="9" text-anchor="middle" font-weight="600">16</text></svg>
+    <div><b>Isobars</b>: lines of equal sea-level pressure every 4 hPa; the label is the last two digits (16 = 1016 hPa, 96 = 996). <b>Closer lines mean stronger wind.</b> Wind blows nearly along them, anticlockwise around a low and clockwise around a high, angled slightly in toward the low.</div>
+  </div>
+  <div class="sk-row">
+    <svg viewBox="0 0 120 26" aria-hidden="true"><text x="34" y="19" fill="#5aa9ff" font-size="18" font-weight="800" text-anchor="middle">H</text><text x="86" y="19" fill="#ff5a4e" font-size="18" font-weight="800" text-anchor="middle">L</text></svg>
+    <div><b>H / L</b>: high and low pressure centres with their central pressure. Highs usually bring settled, drier weather (and subsidence that can dry fuels); lows bring cloud, wind and precipitation.</div>
+  </div>
+  <div class="sk-row">
+    <svg viewBox="0 0 120 26" aria-hidden="true"><path d="M4 18 H116" stroke="#3b82ff" stroke-width="2.6"/><g fill="#3b82ff"><path d="M18 18 L32 18 L25 6Z"/><path d="M53 18 L67 18 L60 6Z"/><path d="M88 18 L102 18 L95 6Z"/></g></svg>
+    <div><b>Cold front</b>: colder air pushing in; triangles point the way it's moving. <b>Most important for fire:</b> warm, dry, gusty (often SW) winds ahead of it, then an <b>abrupt wind shift</b> (often to NW) with strong gusts as it passes, which can turn a flank into a head fire. Temperature drops and RH rises behind it.</div>
+  </div>
+  <div class="sk-row">
+    <svg viewBox="0 0 120 26" aria-hidden="true"><path d="M4 18 H116" stroke="#ff4436" stroke-width="2.6"/><g fill="#ff4436"><path d="M19 18 A6.5 6.5 0 0 1 32 18Z"/><path d="M54 18 A6.5 6.5 0 0 1 67 18Z"/><path d="M89 18 A6.5 6.5 0 0 1 102 18Z"/></g></svg>
+    <div><b>Warm front</b>: warmer air advancing; half-circles point the way it's moving. Gradual: thickening cloud and often rain or snow ahead, then a gentler wind turn (e.g. SE to SW). Usually less dangerous than a cold front, but the warm, drier air behind it can raise fire danger.</div>
+  </div>
+  <div class="sk-row">
+    <svg viewBox="0 0 120 26" aria-hidden="true"><path d="M4 14 H30" stroke="#3b82ff" stroke-width="2.6"/><path d="M30 14 H56" stroke="#ff4436" stroke-width="2.6"/><path d="M56 14 H82" stroke="#3b82ff" stroke-width="2.6"/><path d="M82 14 H108" stroke="#ff4436" stroke-width="2.6"/><g fill="#3b82ff"><path d="M10 14 L24 14 L17 3Z"/><path d="M62 14 L76 14 L69 3Z"/></g><g fill="#ff4436"><path d="M36.5 14 A6.5 6.5 0 0 0 49.5 14Z"/><path d="M88.5 14 A6.5 6.5 0 0 0 101.5 14Z"/></g></svg>
+    <div><b>Stationary front</b>: a boundary that isn't moving much. Neither air mass is pushing, so the symbols face each other from opposite sides. Winds on each side tend to blow along it; it can sit for a day or more or waver back and forth, often with lingering cloud and rain. Watch for it to start moving again as a cold or warm front.</div>
+  </div>
+  <div class="sk-row">
+    <svg viewBox="0 0 120 26" aria-hidden="true"><path d="M4 18 H116" stroke="#b65cff" stroke-width="2.6"/><g fill="#b65cff"><path d="M12 18 L26 18 L19 6Z"/><path d="M38 18 A6.5 6.5 0 0 1 51 18Z"/><path d="M62 18 L76 18 L69 6Z"/><path d="M88 18 A6.5 6.5 0 0 1 101 18Z"/></g></svg>
+    <div><b>Occluded front</b>: where a cold front has caught up with the warm front ahead of it near the low, lifting the warm air off the ground. Both symbols on the same side, pointing the way it's moving. Marks a mature or weakening low; brings a wind shift, cloud and precipitation as it passes.</div>
+  </div>
+  <div class="sk-row">
+    <svg viewBox="0 0 120 26" aria-hidden="true"><path d="M4 14 H116" stroke="#e0a03a" stroke-width="2" stroke-dasharray="9 6"/></svg>
+    <div><b>Trough</b>: an elongated area of lower pressure without a sharp air-mass change. Expect a wind shift along it and sometimes showers or thunderstorms; a trough ahead of a cold front can bring the wind shift early.</div>
+  </div>
+  <div class="sk-row">
+    <svg viewBox="0 0 120 26" aria-hidden="true"><circle cx="60" cy="13" r="3.5" fill="#fff"/><path d="M60 13 L36 4 M60 13 L84 4 M60 13 V25" stroke="#cfd6de" stroke-width="1.6"/></svg>
+    <div><b>Triple point</b>: where cold, warm (or stationary) and occluded fronts meet, often a focus for new storm development and sharp wind changes.</div>
+  </div>
+  <p class="sk-note">Isobars and H/L come from the RDPS model for the hour shown; fronts are drawn by NOAA's Weather Prediction Center and appear only within 3 h of their analysis or forecast times (see the legend). For a base, the front watch in the point panel gives distance, speed and the forecast wind shift.</p>
+</aside>
+
 <div class="panel" id="readout" hidden></div>
 
 <div class="panel" id="legend">
-  <div class="legend-title" id="legend-title"></div>
+  <div class="legend-head">
+    <div class="legend-title" id="legend-title"></div>
+    <div class="seg" id="legend-scale" role="group" aria-label="Colour scale" hidden>
+      <button type="button" data-scale="classes" title="CWFIS danger classes">Classes</button>
+      <button type="button" data-scale="continuous" title="Continuous colour ramp (CWFIS colours)">Continuous</button>
+    </div>
+  </div>
   <canvas id="legend-bar" width="260" height="12"></canvas>
   <div class="legend-ticks" id="legend-ticks"></div>
+  <div class="legend-desc" id="legend-desc" hidden></div>
+  <div class="syn-note" id="syn-note" hidden></div>
+  <div class="syn-note" id="firms-note" hidden></div>
 </div>
 
 <aside class="panel" id="meteogram" hidden>
   <div class="mg-head">
-    <div>
-      <div class="mg-title" id="mg-title">Point forecast</div>
-      <div class="sub" id="mg-sub"></div>
+    <div class="mg-top">
+      <div>
+        <div class="mg-title" id="mg-title">Point forecast</div>
+        <div class="sub" id="mg-sub"></div>
+      </div>
+      <button class="icon" id="mg-close" aria-label="Close">×</button>
     </div>
     <div class="mg-actions">
       <a class="btn" id="mg-report" target="_blank" rel="noopener">Burn report ↗</a>
       <a class="btn" id="mg-fire" target="_blank" rel="noopener">Fire growth ↗</a>
       <a class="btn" id="mg-firewx" target="_blank" rel="noopener">Fire wx forecast ↗</a>
-      <button class="icon" id="mg-close" aria-label="Close">×</button>
     </div>
+    <div id="mg-front" hidden></div>
   </div>
   <div class="mg-chart"><canvas id="ch-trh"></canvas></div>
   <div class="mg-chart"><canvas id="ch-wind"></canvas></div>
@@ -80,7 +136,11 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-array@3.2.4/dist/d3-array.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-contour@4.0.2/dist/d3-contour.min.js"></script>
 <script src="/static/windlayer.js?v=1"></script>
-<script src="/static/app.js?v=13"></script>
+<script src="/static/synoptic.js?v=1"></script>
+<script src="/static/frontwatch.js?v=1"></script>
+<script src="/static/app.js?v=26"></script>
 </body>
 </html>

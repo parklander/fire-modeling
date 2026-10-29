@@ -172,7 +172,7 @@
 
   function alertsBlock(R) {
     if (!R.alerts.length) return `<p class="sub">No ECCC alerts in effect for this location.</p>`;
-    return `<h3>Alerts in effect</h3>${R.alerts.map((a) => `<div class="alert-box ${a.air_quality ? "aq" : ""}"><b>${esc(a.name)}</b> <small>issued ${dt(a.issued)}, expires ${dt(a.expires)}</small><pre>${esc(a.text.slice(0, 700))}${a.text.length > 700 ? "…" : ""}</pre></div>`).join("")}`;
+    return `<h3>Alerts in effect</h3>${R.alerts.map((a) => `<div class="alert-box ${a.air_quality ? "aq" : ""}"><b>${esc(a.name)}</b> <small>issued ${dt(a.issued)}, expires ${dt(a.expires)}${a.link ? ` · <a href="${esc(a.link)}" target="_blank" rel="noopener">source: weather.gc.ca ↗</a>` : ""}</small><pre>${esc(a.text.slice(0, 700))}${a.text.length > 700 ? "…" : ""}</pre></div>`).join("")}`;
   }
 
   function hourly(R) {
@@ -444,7 +444,8 @@
     LAST = R;
     if (!f.date.value) f.date.value = R.meta.burn_date;
     for (const k of ["wind", "gust", "rh_min", "cape", "shift_deg"]) if (!f[k].value) f[k].value = R.meta.thresholds[k];
-    document.title = `${R.meta.name || "Burn weather"} – ${R.meta.title}`;
+    const mr = R.meta.run;  // forecast version in the title, which is the default Save as PDF file name
+    document.title = `${R.meta.name || "Burn weather"} – ${R.meta.title} – burn ${R.meta.burn_date} – RDPS ${mr.slice(0, 4)}-${mr.slice(4, 6)}-${mr.slice(6, 8)} ${mr.slice(8, 10)}Z`;
     paint();
   }
 
@@ -454,7 +455,7 @@
     const r0 = document.getElementById("remarks");
     if (r0) remarks = r0.innerHTML;
     try {
-      doc.innerHTML = header(R) + banner(R) + prescription(R) + burnDay(R) + outlook(R) + overnight(R) + fwi(R) +
+      doc.innerHTML = header(R) + banner(R) + (R.frontwatch ? frontWatchHtml(R.frontwatch, { tz: TZ }) : "") + prescription(R) + burnDay(R) + outlook(R) + overnight(R) + fwi(R) +
         triggers(R) + hourly(R) + methods(R);
     } catch (e) {
       console.error(e);

@@ -1,6 +1,7 @@
 """Download RDPS GRIB2 files, convert to display frames, track per-run availability."""
 import asyncio
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -38,6 +39,27 @@ def parse_filename(name):
 
 def frame_path(run, var, fh):
     return config.RUNS_DIR / run / var / f"{fh:03d}.u16.gz"
+
+
+def frame_ok(path):
+    """A frame starts with the gzip magic number. A crash or power loss mid-write can leave a full-size file of
+    zeros (the rename reached the disk before the data); those fail this check."""
+    try:
+        with open(path, "rb") as f:
+            return f.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
+
+
+def write_durably(path, data):
+    """Write to a temp file, flush it to disk, then rename into place: a crash leaves either the old file or the
+    complete new one, never a zero-filled one."""
+    part = path.with_suffix(f".{threading.get_ident()}.part")
+    with open(part, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    part.replace(path)
 
 
 class EventBus:
@@ -82,11 +104,25 @@ class Store:
         self._lock = threading.Lock()
         self.runs = {}  # run -> {var: set(hours)}
         config.RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        bad = 0
         for d in config.RUNS_DIR.iterdir():
             if d.is_dir() and re.fullmatch(r"\d{10}", d.name):
-                self.runs[d.name] = {
-                    v: {int(p.name[:3]) for p in (d / v).glob("*.u16.gz")} if (d / v).is_dir() else set()
-                    for v in config.ALL_VARS}
+                self.runs[d.name] = {v: set() for v in config.ALL_VARS}
+                for v in config.ALL_VARS:
+                    for p in (d / v).glob("*.u16.gz") if (d / v).is_dir() else ():
+                        if frame_ok(p):
+                            self.runs[d.name][v].add(int(p.name[:3]))
+                        else:  # damaged (e.g. by a crash): delete so it is downloaded / derived again
+                            log.warning("deleting damaged frame %s", p.relative_to(config.RUNS_DIR))
+                            p.unlink(missing_ok=True)
+                            bad += 1
+                    for p in (d / v).glob("*.part") if (d / v).is_dir() else ():
+                        try:  # leftovers from an interrupted write (skip one another process is still writing)
+                            p.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+        if bad:
+            log.warning("deleted %d damaged frames; they will be fetched again", bad)
         self.listeners = []  # called as fn(run, var, fh) after each new frame
 
     def has(self, run, var, fh):
@@ -126,7 +162,11 @@ class Store:
                 hours = sorted(set.intersection(*(r[v] for v in config.VARIABLES))) if r else []
                 index_hours = sorted(set.intersection(*(r[v] for v in config.INDICES))) if r else []
                 smoke_hours = sorted(set.intersection(*(r[v] for v in config.SMOKE))) if r else []
+                precip_hours = sorted(set.intersection(*(r[v] for v in config.PRECIP))) if r else []
+                mslp_hours = sorted(r.get("mslp", ())) if r else []
+                cloud_hours = sorted(r.get("cloud", ())) if r else []
                 out.append({"run": run, "hours": hours, "index_hours": index_hours, "smoke_hours": smoke_hours,
+                            "precip_hours": precip_hours, "mslp_hours": mslp_hours, "cloud_hours": cloud_hours,
                             "complete": self._complete(run),
                             "count": sum(len(r[v]) for v in config.VARIABLES),
                             "total": len(config.VARIABLES) * len(config.FORECAST_HOURS)})
@@ -221,9 +261,7 @@ class Ingestor:
 def write_frame(store, run, var, fh, raster):
     out = frame_path(run, var, fh)
     out.parent.mkdir(parents=True, exist_ok=True)
-    part = out.with_suffix(f".{threading.get_ident()}.part")
-    part.write_bytes(grid.encode(raster, var))
-    part.replace(out)
+    write_durably(out, grid.encode(raster, var))
     store.add(run, var, fh)
 
 

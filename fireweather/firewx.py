@@ -244,6 +244,22 @@ def area_fbp(fuels, lat, lon, d, ffmc, bui, ws, curing=None):
     return per, worst
 
 
+# Manitoba, approximately (lon, lat): the SK border (~101.4-102°W), 60°N, Hudson Bay, the ON border (95.15°W, then the
+# diagonal to 56.85°N 88.95°W) and 49°N. Good to a few km, enough to decide whether the Manitoba danger scale applies.
+MANITOBA = [(-101.36, 49.0), (-95.15, 49.0), (-95.15, 52.83), (-88.95, 56.85), (-94.8, 60.0), (-102.0, 60.0),
+            (-102.0, 55.8), (-101.6, 52.0)]
+
+
+def in_manitoba(lat, lon):
+    """Point-in-polygon (ray casting) against the approximate Manitoba boundary."""
+    inside, n = False, len(MANITOBA)
+    for i in range(n):
+        (x1, y1), (x2, y2) = MANITOBA[i], MANITOBA[(i + 1) % n]
+        if (y1 > lat) != (y2 > lat) and lon < x1 + (lat - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
 def build(store, lat, lon, run=None, past_days=2, radius_km=10.0, curing=None, with_fbp=True):
     summ = {r["run"]: r for r in store.summary()}
     if run is None:
@@ -292,6 +308,7 @@ def build(store, lat, lon, run=None, past_days=2, radius_km=10.0, curing=None, w
     return {
         "meta": {"lat": lat, "lon": lon, "grid_lat": round(cell[0], 3), "grid_lon": round(cell[1], 3),
                  "timezone": str(tz), "today": today.isoformat(), "run": run, "run_complete": summ[run]["complete"],
+                 "in_manitoba": in_manitoba(lat, lon),  # the Manitoba FWI danger scale is shown only here
                  "issued": datetime.now(timezone.utc).astimezone(tz).isoformat(),
                  "cwfis_last": last.isoformat() if last else None,
                  "seed": {"date": seed_day.isoformat(), "source": "CWFIS daily grid" if seeded else "FWI startup defaults",

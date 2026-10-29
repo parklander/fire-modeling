@@ -129,8 +129,14 @@ def aqhi_risk(v):
 AIR_QUALITY_WORDS = ("air quality", "smoke", "qualité de l'air")
 
 
-def alerts(lat, lon):
-    """Active alerts whose area covers the point (tiny bbox intersect)."""
+def alert_page(lat, lon):
+    """weather.gc.ca location page for a point: its forecast with any alerts in effect at the top."""
+    return f"https://weather.gc.ca/en/location/index.html?coords={lat:.3f},{lon:.3f}"
+
+
+def alerts(lat, lon, strict=False):
+    """Active alerts whose area covers the point (tiny bbox intersect). With strict, a failed request raises
+    instead of looking like "no alerts" (the alert poller then keeps what it last saw)."""
     def fetch():
         d = _get_json(f"{API}/weather-alerts/items",
                       {"bbox": f"{lon - 0.01},{lat - 0.01},{lon + 0.01},{lat + 0.01}", "limit": 100})
@@ -151,9 +157,15 @@ def alerts(lat, lon):
                 "air_quality": any(w in name.lower() for w in AIR_QUALITY_WORDS)
                 or p.get("alert_code") in ("SAQS", "AQ"),
                 "text": (p.get("alert_text_en") or "").strip(),
+                "area": p.get("feature_name_en"),
+                # GeoMet gives no link; ECCC's location page for the point shows the alerts in effect there
+                "link": alert_page(lat, lon),
             })
         return out
-    return _cached(f"alerts:{lat:.2f},{lon:.2f}", 300, fetch) or []
+    v = _cached(f"alerts:{lat:.2f},{lon:.2f}", 300, fetch)
+    if v is None and strict:
+        raise RuntimeError("GeoMet weather-alerts unavailable")
+    return v or []
 
 
 # ---- CWFIS station FWI ------------------------------------------------------------

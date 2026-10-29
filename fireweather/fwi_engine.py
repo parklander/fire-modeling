@@ -170,6 +170,8 @@ class FWIEngine:
         path = config.FWI_STATE_DIR / f"{valid}_{run}.npz"
         tmp = path.with_suffix(".tmp.npz")
         np.savez_compressed(tmp, **{k: state[k].astype(np.float32) for k in cffdrs.STATE_KEYS})
+        with open(tmp, "rb+") as f:  # on disk before the rename, so a crash can't leave a zero-filled state
+            os.fsync(f.fileno())
         tmp.replace(path)
         self._prune_states()
 
@@ -182,15 +184,19 @@ class FWIEngine:
 
     def _initial_state(self, run):
         """State valid at the run's T+0, or None to wait for an earlier run to produce it."""
-        best = None
-        for p in config.FWI_STATE_DIR.glob(f"{run}_*.npz"):
-            m = STATE_RE.search(p.name)
-            if m and m[2] < run and (best is None or m[2] > STATE_RE.search(best.name)[2]):
-                best = p
-        if best is not None:
-            z = np.load(best)
+        cands = sorted((p for p in config.FWI_STATE_DIR.glob(f"{run}_*.npz")
+                        if (m := STATE_RE.search(p.name)) and m[2] < run),
+                       key=lambda p: STATE_RE.search(p.name)[2], reverse=True)
+        for best in cands:  # newest first; skip (and delete) a state damaged by a crash
+            try:
+                z = np.load(best)
+                state = {k: z[k].astype(np.float64) for k in cffdrs.STATE_KEYS}
+            except Exception as e:
+                log.warning("FWI state %s unreadable (%s); deleting it", best.name, e)
+                best.unlink(missing_ok=True)
+                continue
             log.info("FWI %s: starting from state saved by run %s", run, STATE_RE.search(best.name)[2])
-            return {k: z[k].astype(np.float64) for k in cffdrs.STATE_KEYS}
+            return state
         # An earlier run on disk that will reach this run's T+0 at a save hour: wait for it.
         t0 = _run_time(run)
         for prev in self.store.runs:

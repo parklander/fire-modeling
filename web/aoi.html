@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Areas of Interest</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@geoman-io/leaflet-geoman-free@2.14.2/dist/leaflet-geoman.css">
+<style>
+  :root { --bg: #12161c; --bg2: #1a2028; --line: rgba(255,255,255,.1); --fg: #e8ecf1; --muted: #9aa5b1; --accent: #ff8a3d; --bad: #ff6b5e; --ok: #4cd08a;
+    font-family: Inter, "Segoe UI", system-ui, sans-serif; font-size: 13px; color: var(--fg); }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: var(--bg); }
+  body { display: flex; }
+  #side { width: 380px; flex: none; height: 100%; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+  #map { flex: 1; height: 100%; }
+  header { padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  header .t { font-weight: 650; font-size: 15px; }
+  .sub { color: var(--muted); font-size: 11.5px; }
+  a { color: var(--fg); }
+  button, .btn { background: var(--bg2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; text-decoration: none; }
+  button:hover { border-color: rgba(255,255,255,.25); }
+  button.primary { background: var(--accent); color: #1a1006; border-color: var(--accent); font-weight: 650; }
+  button.primary:disabled { opacity: .45; cursor: default; }
+  button.danger { color: #ffb3ab; }
+  #list { flex: 0 0 auto; max-height: 34%; overflow-y: auto; border-bottom: 1px solid var(--line); }
+  .item { display: flex; align-items: center; gap: 8px; padding: 6px 14px; cursor: pointer; border-left: 3px solid transparent; }
+  .item:hover { background: rgba(255,255,255,.04); }
+  .item.sel { background: rgba(255,138,61,.12); border-left-color: var(--accent); }
+  .item .nm { flex: 1; }
+  .item .tag { font-size: 10.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  .item .tag.box { color: #9fe0b0; border-color: rgba(76,208,138,.4); }
+  .item .star { color: var(--accent); }
+  #form { flex: 1; overflow-y: auto; padding: 10px 14px; display: grid; gap: 9px; align-content: start; }
+  label { display: grid; gap: 3px; color: var(--muted); font-size: 12px; }
+  input, select { background: var(--bg2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; width: 100%; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .row3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; }
+  .tools { display: flex; flex-wrap: wrap; gap: 6px; }
+  .box { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 7px; }
+  .box h4 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  footer { padding: 10px 14px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
+  footer .acts { display: flex; gap: 8px; align-items: center; }
+  #status { min-height: 16px; font-size: 12px; color: var(--muted); }
+  #status.err { color: var(--bad); }
+  #status.ok { color: var(--ok); }
+  .hint { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+  .lbl { background: rgba(18,22,28,.85); color: #fff; border: 1px solid rgba(255,255,255,.2); border-radius: 4px; font-size: 11px; padding: 1px 5px; white-space: nowrap; }
+  @media (max-width: 760px) { body { flex-direction: column-reverse; } #side { width: 100%; height: 60%; } #map { height: 40%; } }
+</style>
+</head>
+<body>
+<div id="side">
+  <header>
+    <div><div class="t">Areas of interest</div><div class="sub">Bases and training areas used by every page</div></div>
+    <a class="btn" href="/">Weather map ↗</a>
+  </header>
+  <div id="list"></div>
+  <div style="padding:8px 14px;border-bottom:1px solid var(--line)" class="tools">
+    <button id="add">+ Add area</button>
+    <button id="up" title="Move up">↑</button><button id="down" title="Move down">↓</button>
+    <button id="mkdefault" title="Open this area by default">★ Default</button>
+    <button id="del" class="danger">Delete</button>
+  </div>
+  <div id="form"></div>
+  <footer>
+    <div id="status"></div>
+    <div class="acts">
+      <button id="save" class="primary" disabled>Save changes</button>
+      <button id="revert" disabled>Discard</button>
+      <select id="backups" title="Restore an earlier version" style="width:auto;flex:1"><option value="">Earlier versions…</option></select>
+    </div>
+  </footer>
+</div>
+<div id="map"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@geoman-io/leaflet-geoman-free@2.14.2/dist/leaflet-geoman.min.js"></script>
+<script src="/static/aoi.js?v=3"></script>
+</body>
+</html>

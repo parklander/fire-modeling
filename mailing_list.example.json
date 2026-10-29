@@ -1,0 +1,28 @@
+{
+  "_note": "Copy to mailing_list.json (git-ignored) and edit. One entry per scheduled email. time is local time at the area (24 h); days defaults to every day; scale is mb (Manitoba, from FWI) or cwfis; fire_behaviour adds the FBP section to the PDF (radius_km, default 10). Changes are picked up within a minute, no restart needed.",
+  "reports": [
+    {
+      "id": "shilo-daily",
+      "aoi": "shilo",
+      "time": "06:30",
+      "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      "scale": "mb",
+      "fire_behaviour": false,
+      "to": ["base.fire.chief@example.ca"],
+      "cc": [],
+      "bcc": ["range.control@example.ca", "duty.officer@example.ca"]
+    }
+  ],
+  "_front_alerts_note": "Front watch alerts: email when RDPS forecasts a frontal wind shift at the area within within_hours. strength is strong (wind >= 30 km/h or gusts >= 50 after the shift) or any. One email per event; the weather map also shows them and can raise desktop notifications.",
+  "front_alerts": [
+    {
+      "id": "shilo-fronts",
+      "aoi": "shilo",
+      "within_hours": 24,
+      "strength": "strong",
+      "to": ["base.fire.chief@example.ca"],
+      "cc": [],
+      "bcc": []
+    }
+  ]
+}

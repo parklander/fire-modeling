@@ -120,7 +120,29 @@ SMOKE = {
 VI_POOR_BELOW = 2350
 VI_GOOD_ABOVE = 4700
 
-DOWNLOAD_VARS = {**VARIABLES, **BURN_INPUTS}
+# Precipitation type, hourly 1..84: feeds the derived rate/type layer (precip.py)
+PRECIP_INPUTS = {
+    # mean sea-level pressure for the synoptic overlay (isobars, H/L); hourly like the precip type
+    "mslp": {"token": "Pressure_MSL", "label": "Mean sea-level pressure", "units": "hPa",
+             "convert": lambda pa: pa / 100.0, "offset": 850.0, "scale": 10.0},
+    # total cloud cover, % (hourly 0..84; a display layer, not needed for a run to count as complete)
+    "cloud": {"token": "TotalCloudCover_Sfc", "label": "Total cloud cover", "units": "%",
+              "convert": None, "offset": 0.0, "scale": 1.0},
+    "ptype_raw": {"token": "PrecipType-Instant_Sfc", "label": "Precipitation type (model, instantaneous)",
+                  "units": "ECCC code", "convert": None, "offset": 0.0, "scale": 1.0},
+}
+# Derived hourly: rate = difference of accumulated precip between hours; type 0 none, 1 rain, 2 mix,
+# 3 freezing rain, 4 ice pellets, 5 snow
+PRECIP = {
+    "prate": {"label": "Precipitation rate", "units": "mm/h", "offset": 0.0, "scale": 100.0},
+    "ptype": {"label": "Precipitation type", "units": "", "offset": 0.0, "scale": 1.0},
+}
+PTYPE_NAMES = {0: "None", 1: "Rain", 2: "Rain/snow mix", 3: "Freezing rain", 4: "Ice pellets", 5: "Snow"}
+PRATE_MIN = 0.05  # mm/h: less than this in the hour counts as no precipitation
+FRONTS_POLL_MIN = 30  # WPC surface analysis (every 3 h) and day 1-3 forecast fronts (fronts.py)
+FRONTS_HISTORY = 8  # past analyses kept (3-hourly, so ~1 day) to measure front motion
+
+DOWNLOAD_VARS = {**VARIABLES, **BURN_INPUTS, **PRECIP_INPUTS}
 TOKEN_TO_VAR = {v["token"]: k for k, v in DOWNLOAD_VARS.items()}
 
 
@@ -139,7 +161,7 @@ INDICES = {
     "dc": _idx("Drought Code (DC)"),
     "gfwi": _idx("Grassland Fire Weather Index (GFWI)"),
 }
-ALL_VARS = {**VARIABLES, **BURN_INPUTS, **SMOKE, **INDICES}
+ALL_VARS = {**VARIABLES, **BURN_INPUTS, **SMOKE, **INDICES, **PRECIP_INPUTS, **PRECIP}
 
 FWI_STATE_DIR = DATA_DIR / "fwi_state"
 # Forecast hours at which a run's moisture state is saved to start later runs from.
@@ -170,6 +192,21 @@ CLUSTER_KM = 1.5        # detections closer than this (and within CLUSTER_HOURS)
 CLUSTER_HOURS = 48
 INCIDENT_BASE_KM = 50   # auto-simulate incidents within this distance of an area of interest
 AUTO_SIM_HOURS_AHEAD = 12
+# ---- Scheduled email of the fire weather forecast (fireweather/mailer.py) ----
+MAIL_LIST_FILE = ROOT / "mailing_list.json"  # recipients + schedule; git-ignored (see mailing_list.example.json)
+SMTP_HOST = os.environ.get("SMTP_HOST", "")  # unset = dry run: emails are written to data/outbox/
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_SECURITY = os.environ.get("SMTP_SECURITY", "ssl" if SMTP_PORT == 465 else "starttls")  # starttls | ssl | none
+MAIL_FROM = os.environ.get("MAIL_FROM", "")
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "")  # where recipients can open the live report, if reachable
+SELF_URL = os.environ.get("FW_SELF_URL", "http://127.0.0.1:8000")  # this server, for printing the PDF
+MAIL_LATE_LIMIT_H = 6  # after a restart, still send a report up to this many hours past its time
+MAIL_RETRY_MIN = 15
+ALERT_POLL_MIN = 5  # ECCC public alerts (battleboard feeds / GeoMet) per area of interest
+ALERT_END_POLLS = 2  # an alert counts as ended only after this many checks in a row without it
+MBWX_POLL_MIN = 60  # Manitoba Wildfire Service daily observed/forecast reports (mbwx.py)
 AUTO_SIM_MAX_AGE_H = 12  # only auto-simulate incidents detected within this many hours (older = likely out)
 
 # Display raster: Web Mercator, clipped to North America.

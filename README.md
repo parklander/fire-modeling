@@ -33,6 +33,14 @@ Keys: ← / → step hours, space plays/pauses.
 
 Both the map and the report have an area-of-interest dropdown. It defaults to CFB Shilo RTA, and each browser remembers its last choice. The list lives in [fireweather/aoi.json](fireweather/aoi.json): the first `default` entry is the default, and edits show up on the next page load without a restart. The coordinates are approximate base/training-area points; replace them with range-control or burn-unit coordinates. Report links use `?aoi=<id>`, so a bookmarked report always follows that area.
 
+**Areas editor** (`/static/aoi.html`, or **Edit areas…** at the bottom of the weather map's area dropdown; [web/aoi.js](web/aoi.js), [fireweather/aoi.py](fireweather/aoi.py)): a map on satellite or topographic imagery for maintaining the list. You can:
+- add, delete, rename and reorder areas, and choose the default;
+- drag each reference point, the one used for point forecasts, reports and alerts;
+- set the ECCC alert feed and the Manitoba report stations;
+- give each area a **boundary**: draw a box (click two opposite corners) or a polygon, edit its corners, or import one from a GeoJSON file in WGS84, which uses the largest polygon. The server stores it as `boundary` ([[lat, lon], ...]) and derives `bbox` [west, south, east, north].
+
+Saving validates the list (unique IDs, points inside the map, a valid default) and writes `aoi.json`. The previous version is kept in `data/aoi_backups/` and can be restored from **Earlier versions**. Saving is only allowed from the server PC or a Tailscale device. Other devices on the local network can view but not edit. The weather map outlines the selected area's boundary. `aoi.json` is tracked in git, so boundaries are pushed to GitHub with everything else.
+
 ## Burn weather reports
 
 Click a location, then **Burn report ↗** in the point panel. You can also go straight to `/static/report.html?lat=49.79&lon=-99.63&name=CFB%20Shilo%20RTA`. The report follows a prescribed-burn met support plan:
@@ -120,6 +128,87 @@ Open `/static/firewx.html?aoi=shilo`, or **Fire wx forecast ↗** from a point o
 - Training-area boundaries aren't available as open data, so the area is a circle.
 
 The two sources can disagree, sometimes a lot (e.g. rain amounts on a frontal day), and seeing both is the point. A trend chart overlays FWI from both, FWI2025 peaks, BUI and precipitation. Cells are tinted by CWFIS danger class.
+
+## Precipitation rate and type, synoptic overlay
+
+**Precip rate** (weather map layer, [fireweather/precip.py](fireweather/precip.py)): each hour's rate is the difference between consecutive accumulated-precipitation frames, i.e. the amount in the hour ending at that time. The colours show the type, from RDPS's instantaneous precipitation type field (`PrecipType-Instant`). ECCC codes 1–5 are rain, rain/snow mix, freezing rain, ice pellets and snow; 6 means none. They were matched against the model's separate 1 h rain, snow, freezing rain and ice pellet amounts. Where the hour had precipitation but the type at the end of the hour is "none", the 2 m temperature decides: 0 °C or below is snow, under 2 °C is mix, otherwise rain. The hover readout and the point panel's bars show the type too.
+
+**Synoptic** (header checkbox, [web/synoptic.js](web/synoptic.js), [fireweather/fronts.py](fireweather/fronts.py)) draws a surface chart over any layer:
+- isobars every 4 hPa (thicker every 20) and H/L centres with their pressure, from RDPS mean sea-level pressure (`Pressure_MSL`), for every forecast hour;
+- surface fronts from the NOAA Weather Prediction Center, in the standard symbols: the 3-hourly surface analysis (coded surface bulletin, positions to 0.1°) and the day 1–3 forecast fronts (National Forecast Chart service, days 2–3 valid 12 UTC; day 1 gives only a date). Fronts appear when the displayed time is within 3 h of a WPC valid time, and the legend says which set is showing or lists the times available.
+
+Fronts are drawn by WPC forecasters from their own analysis, so they won't always sit exactly on an RDPS isobar kink. WPC's forecast fronts reach to about 56°N. `GET /api/fronts` returns the parsed data.
+
+## Satellite layers (GOES-East)
+
+The weather map's **Satellite (GOES-East)** group shows two ECCC GeoMet WMS layers, 1 km, a new image every 10 minutes with about 2 days kept ([fireweather/goes.py](fireweather/goes.py)):
+
+- **Fire temperature** (`GOES-East_1km_FireTemperature-SWIR`): an RGB of shortwave-infrared bands by day, shortwave infrared at night. Active fires show as red (small or cooler) through orange and yellow to near-white (large, very hot) on a dark background. The fire channels are about 2 km per pixel, so **only large or hot fires show, as a dot a pixel or two across: zoom in**. For example, a ~110 MW fire in southern Oregon showed as one dull red pixel, and a 187 MW detection in Idaho didn't show at that hour. GOES's strength is timing (a new image every 10 minutes, between the polar passes that FIRMS uses); FIRMS VIIRS (375 m) catches smaller fires.
+- **Smoke** (`GOES-East_1km_SmokeABIband1-SWIR`): the blue band by day, which smoke scatters strongly, so smoke shows as grey-white haze. Cloud is also bright but sharper-edged and textured. Smoke isn't visible at night.
+
+**FIRMS hotspots** (the **Overlays** checkbox at the bottom of the layer list) shows the last 48 h of NASA FIRMS detections over any layer, satellite views included, above the wind and synoptic overlays. The styling matches the fire growth page: red under 6 h, orange under 24 h, yellow older, and small grey dots for persistent industrial heat sources, which are excluded from incidents. Hover a dot for its sensor, time and FRP. The overlay refreshes after each FIRMS poll.
+
+The image follows the timeline: each hour shows the image from that time (rounded to the 10-minute grid). Forecast hours show the latest image, labelled as such. The timeline starts at the selected run's start, so earlier hours of the 2-day archive aren't reachable from the map. `GET /api/goes` gives the layers' current time ranges.
+
+## Front watch
+
+For every base, and any point clicked on the map ([fireweather/frontwatch.py](fireweather/frontwatch.py)), two independent views of approaching fronts:
+
+- **WPC front motion:** the nearest analysed front within 800 km is compared with the analyses 3 and 6 h earlier. Past bulletins come from the Iowa Environmental Mesonet text archive, since WPC keeps only the latest. Points along the front are matched to the nearest point of an earlier front of a compatible kind (cold with cold, stationary or occluded, and so on). That measures motion across the front: the median displacement over the gap gives the speed, the mean direction gives the heading. The arrival time is the distance divided by the closing speed (the part of the motion toward the base). It's a straight-line extrapolation, given up to 36 h ahead.
+- **RDPS frontal passages:** hours in the forecast at the point where the wind turns at least 45° (3 h mean before against 3 h after) together with a pressure trough (lowest of the ±3 h, then rising at least 0.8 hPa), a temperature drop of 3 °C or more, or an RH rise of 15% or more. A shift only counts with at least 15 km/h after it, or gusts of 30. It's "strong" at 30 km/h, or gusts of 50. Each one is reported with the wind before and after, the peak wind and gust over the next 6 h, and the temperature and RH change.
+
+A base is on **watch** with a frontal wind shift in the next 48 h, and on **warning** when it's strong. This shows in the weather map's point panel, at the top of the burn report, and in the national summary's key findings. `GET /api/frontwatch` (all bases, recomputed with each run and analysis) and `GET /api/frontwatch/point?lat=&lon=` return the data.
+
+**Front alerts** ([fireweather/frontalerts.py](fireweather/frontalerts.py)): set these up in `mailing_list.json` under `front_alerts`. Each entry gives the base, `within_hours`, `strength` (`strong` or `any`) and the recipients. When RDPS forecasts a qualifying shift at the base within that time, the server emails once per event. A shift that moves by up to 4 h between runs counts as the same event. The weather map shows active front alerts in the alert chip and panel, marked as a model forecast rather than an ECCC alert, and raises a desktop notification for new ones once **Notify me** is allowed. `GET /api/frontalerts` lists active and recently emailed alerts.
+
+## Manitoba fire weather reports
+
+The Manitoba Wildfire Service publishes daily observed and forecast noon weather and FWI codes for about 100 stations (Wildfire Service, Manitoba Agriculture and ECCC), back to at least 2008 ([fireweather/mbwx.py](fireweather/mbwx.py)):
+
+- `https://www.gov.mb.ca/conservation_fire/Wx-Report/<YYYY>/<YYYYMMDD>-obs-wxrep.html` (observed)
+- `…-fcst-wxrep.html` (forecast for that date)
+
+Columns are TEMP, RH, WD, WS, RAIN, FFMC, DMC, DC, ISI, BUI, FWI and DSR. The server checks the last few days and tomorrow every hour and keeps every row in `data/mbwx.sqlite`, keyed by date, report type and station. Each forecast can then be compared with what was observed. Fill past seasons with:
+
+```
+.venv\Scripts\python -m fireweather.mbwx backfill 2016-04-01 2016-10-31
+```
+
+It skips days already stored and waits 0.5 s between requests. `GET /api/mbwx/stations` lists the stations with their date ranges. `GET /api/mbwx/series?station=SHILO AG&start=2026-04-01&end=2026-10-31` returns observed and forecast values by day. `mb_stations` in `aoi.json` names each area's stations, nearest first: CFB Shilo uses SHILO AG, then CARBERRY (WZE).
+
+## Emailed forecast
+
+The server can email the fire weather forecast on a schedule ([fireweather/mailer.py](fireweather/mailer.py)). Each email has:
+
+- a subject line with today's danger, e.g. *Fire Weather Forecast – CFB Shilo RTA – Mon Oct 26: Low (FWI 12)*. It starts with ⚠ when ECCC alerts are in effect;
+- a colour-coded daily table (danger, FWI, ISI, BUI, wind, RH, temperature, rain) and any alerts in effect;
+- the full report as a PDF. The server prints it with a headless Edge or Chrome, or the browser set in `PDF_BROWSER`.
+
+**Recipients and schedule** go in `mailing_list.json` in the project root. The file is git-ignored, so addresses never reach GitHub. Copy [mailing_list.example.json](mailing_list.example.json) to start. Each entry is one email: the area, local send time, days of the week, danger scale, an optional fire behaviour section, and `to` / `cc` / `bcc` lists. Use `bcc` for distribution lists so recipients don't see each other. Edits take effect within a minute.
+
+**Mail server** settings go in `.env`:
+
+```
+SMTP_HOST=smtp.office365.com
+SMTP_PORT=587
+SMTP_USER=fireweather@yourdomain.ca
+SMTP_PASSWORD=...
+MAIL_FROM=Fire Weather <fireweather@yourdomain.ca>
+PUBLIC_URL=https://fireweather.yourdomain.ca   # optional: adds a "live report" link
+```
+
+Port 587 uses STARTTLS and port 465 uses SSL. Set `SMTP_SECURITY=none` for an internal relay. With Gmail or Microsoft 365, use an app password or a dedicated sending account, not a personal password.
+
+Without `SMTP_HOST`, nothing is sent. Each email is written to `data/outbox/` as a `.eml` file instead, which you can open in Outlook or Thunderbird to check it. Each report goes out once a day at or after its time. If the server was down at that time, it still sends up to 6 h late. `GET /api/mail` shows the schedule and last result. `POST /api/mail/<id>/send`, run on the server machine, sends one now for testing.
+
+## ECCC weather alerts
+
+The server checks ECCC public alerts (warnings, watches, statements, including Special Air Quality Statements) for every area in `aoi.json` every 5 minutes ([fireweather/alerts.py](fireweather/alerts.py)):
+
+- An area with an `alert_feed` code reads that ECCC alert region's battleboard feed, `https://weather.gc.ca/rss/battleboard/<code>_e.xml`. CFB Shilo uses `mbrm67` (R.M. of Cornwallis west of Shilo incl. Chater). To find a code, open the region on weather.gc.ca/warnings and take the code from its RSS link.
+- Other areas use the MSC GeoMet `weather-alerts` API at the area's point.
+
+New and ended alerts are written to the log, and the pages update over the live feed. The weather map has an **Alerts** chip in the header, showing how many bases have alerts. Its panel lists the selected base's alerts with links to weather.gc.ca and other bases with alerts. **Notify me** turns on desktop notifications for new alerts while the page is open. The fire weather forecast and the national summary list alerts in effect, and the burn report adds the battleboard alerts to its GeoMet ones. `GET /api/alerts` returns everything.
 
 ## Satellite-detected fires (NASA FIRMS)
 

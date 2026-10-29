@@ -5,7 +5,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import amqp_listener, config, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, report, smoke
+from . import alerts, amqp_listener, aoi, config, goes, frontalerts, fronts, frontwatch, mailer, mbwx, precip, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, report, smoke
 
 log = logging.getLogger("server")
 
@@ -22,6 +22,12 @@ store = ingest.Store(bus)
 ingestor = ingest.Ingestor(store)
 engine = fwi_engine.FWIEngine(store)
 smoke_engine = smoke.SmokeEngine(store)
+precip_engine = precip.PrecipEngine(store)
+wx_alerts = alerts.Alerts()
+wpc_fronts = fronts.Fronts()
+front_watch = frontwatch.FrontWatch(store, wpc_fronts)
+mail = mailer.Mailer(store, wx_alerts)
+front_alerts = frontalerts.FrontAlerts(mail)
 
 
 def _incident_sim(run, ignitions, start, hours, center):
@@ -50,8 +56,16 @@ async def lifespan(app):
         threading.Thread(target=ingest.reconcile_loop, args=(ingestor, _stop), name="reconcile", daemon=True),
         threading.Thread(target=engine.loop, args=(_stop,), name="fwi", daemon=True),
         threading.Thread(target=smoke_engine.loop, args=(_stop,), name="smoke", daemon=True),
+        threading.Thread(target=precip_engine.loop, args=(_stop,), name="precip", daemon=True),
         threading.Thread(target=fires.loop, args=(_stop, lambda: bus.publish({"type": "incidents"})),
                          name="firms", daemon=True),
+        threading.Thread(target=wx_alerts.loop, args=(_stop, lambda: bus.publish({"type": "alerts"})),
+                         name="alerts", daemon=True),
+        threading.Thread(target=mail.loop, args=(_stop,), name="mailer", daemon=True),
+        threading.Thread(target=wpc_fronts.loop, args=(_stop,), name="fronts", daemon=True),
+        threading.Thread(target=front_watch.loop, name="frontwatch", daemon=True,
+                         args=(_stop, lambda b: front_alerts.check(b) and bus.publish({"type": "frontalerts"}))),
+        threading.Thread(target=mbwx.loop, args=(_stop,), name="mbwx", daemon=True),
     ]
     for t in threads:
         t.start()
@@ -59,6 +73,7 @@ async def lifespan(app):
     _stop.set()
     engine.wake.set()
     smoke_engine.wake.set()
+    precip_engine.wake.set()
     ingestor.pool.shutdown(wait=False, cancel_futures=True)
 
 
@@ -80,10 +95,40 @@ def meta():
     return {
         "bounds": config.BOUNDS, "width": w, "height": h,
         "hours": config.FORECAST_HOURS,
+        "ptype_names": config.PTYPE_NAMES,
         "variables": {k: {"label": v["label"], "units": v["units"], "scale": v["scale"], "offset": v["offset"],
                           "index": k in config.INDICES, "smoke": k in config.SMOKE or k in ("pbl", "cape")}
                       for k, v in config.ALL_VARS.items() if k not in config.AUX_VARS},
     }
+
+
+@app.post("/api/aoi")
+async def save_areas(request: Request):
+    """Replace the area list (Areas editor). Only from this machine or a Tailscale device; keeps a backup."""
+    if request.client is None or not aoi.may_edit(request.client.host):
+        raise HTTPException(403, "editing areas is only allowed from the server itself or a Tailscale device")
+    try:
+        doc = await request.json()
+        saved = await asyncio.to_thread(aoi.save, doc)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    log.info("areas of interest saved from %s: %d areas", request.client.host, len(saved["areas"]))
+    return saved
+
+
+@app.get("/api/aoi/backups")
+def area_backups(request: Request):
+    return {"backups": aoi.backups(), "can_edit": request.client is not None and aoi.may_edit(request.client.host)}
+
+
+@app.post("/api/aoi/restore/{name}")
+async def restore_areas(name: str, request: Request):
+    if request.client is None or not aoi.may_edit(request.client.host):
+        raise HTTPException(403, "editing areas is only allowed from the server itself or a Tailscale device")
+    try:
+        return await asyncio.to_thread(aoi.restore, name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/aoi")
@@ -117,7 +162,7 @@ def _pixel_value(run, var, fh, idx):
     return None if v is None else round(v, 2)
 
 
-POINT_VARS = [*config.VARIABLES, "gust", "pbl", "cape", *config.SMOKE, *config.INDICES]
+POINT_VARS = [*config.VARIABLES, "gust", "pbl", "cape", *config.SMOKE, *config.INDICES, *config.PRECIP, "cloud"]
 
 
 @app.get("/api/point")
@@ -148,9 +193,94 @@ async def burn_report(lat: float, lon: float, run: str | None = None, product: s
                       shift_deg: float | None = None):
     th = {"wind": wind, "gust": gust, "rh_min": rh_min, "cape": cape, "shift_deg": shift_deg}
     try:
-        return await asyncio.to_thread(report.build, store, lat, lon, run, product, date, th, name)
+        r = await asyncio.to_thread(report.build, store, lat, lon, run, product, date, th, name)
     except (ValueError, LookupError) as e:
         raise HTTPException(400, str(e))
+    try:  # fronts approaching the burn location (best-effort: the report stands without it)
+        r["frontwatch"] = await asyncio.to_thread(front_watch.point, lat, lon)
+    except Exception as e:
+        log.warning("front watch for report unavailable: %s", e)
+        r["frontwatch"] = None
+    # add the alert region's own feed (battleboard) when the point is at a configured area
+    area = wx_alerts.near(lat, lon)
+    if area:
+        have = {a["name"].lower() for a in r["alerts"]}
+        r["alerts"] += [a for a in area["alerts"] if a["name"].lower() not in have]
+    return r
+
+
+@app.get("/api/mail")
+def mail_reports():
+    """Scheduled forecast emails: schedule and last result (recipient counts only, not addresses)."""
+    return {"smtp": bool(config.SMTP_HOST and (config.SMTP_PASSWORD or not config.SMTP_USER)), "reports": mail.view()}
+
+
+@app.post("/api/mail/{rid}/send")
+async def mail_send_now(rid: str, request: Request):
+    """Send one scheduled report now (test). Only from the machine running the server."""
+    if request.client is None or request.client.host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(403, "only from the server itself")
+    try:
+        return {"result": await asyncio.to_thread(mail.send_now, rid)}
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"send failed: {e}")
+
+
+@app.get("/api/mbwx/stations")
+def manitoba_stations():
+    """Manitoba Wildfire Service report stations with the date range stored for each."""
+    return {"stations": mbwx.stations()}
+
+
+@app.get("/api/mbwx/series")
+def manitoba_series(station: str, start: str, end: str):
+    """Daily observed and forecast noon weather + FWI codes for one station, start..end (YYYY-MM-DD)."""
+    try:
+        date.fromisoformat(start), date.fromisoformat(end)
+    except ValueError:
+        raise HTTPException(400, "start and end must be YYYY-MM-DD")
+    return {"station": station, "days": mbwx.series(station, start, end)}
+
+
+@app.get("/api/frontwatch")
+async def front_watch_bases():
+    """Front watch for every area of interest: nearest WPC front and its motion, RDPS frontal passages."""
+    return {"bases": await asyncio.to_thread(front_watch.bases)}
+
+
+@app.get("/api/frontalerts")
+def front_alert_list():
+    """Front watch alerts now in effect (from mailing_list.json front_alerts) and recently emailed events."""
+    v = front_alerts.view()
+    return {"active": v["active"], "recent": [{k: s[k] for k in ("id", "aoi", "event_time", "sent_at")} for s in v["recent"]]}
+
+
+@app.get("/api/frontwatch/point")
+async def front_watch_point(lat: float, lon: float):
+    """Front watch at any point."""
+    r = await asyncio.to_thread(front_watch.point, lat, lon)
+    if r is None:
+        raise HTTPException(404, "no complete model run with sea-level pressure yet, or point outside the domain")
+    return r
+
+
+@app.get("/api/goes")
+async def goes_times():
+    """GOES-East satellite layers (GeoMet WMS) and their current time range."""
+    return {"wms": goes.WMS, "layers": await asyncio.to_thread(goes.times)}
+
+
+@app.get("/api/fronts")
+def surface_fronts():
+    """WPC analysed and day 1-3 forecast fronts and highs/lows (fronts.py)."""
+    return wpc_fronts.view()
+
+
+@app.get("/api/alerts")
+def weather_alerts():
+    return {"poll_min": config.ALERT_POLL_MIN, "areas": wx_alerts.view()}
 
 
 class FireRequest(BaseModel):

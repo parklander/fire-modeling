@@ -11,6 +11,7 @@ data/
 
 # Logs
 *.log
+logs/
 
 # Claude Code local settings (launch.json is shared; personal settings aren't)
 .claude/settings.local.json
@@ -23,6 +24,7 @@ data/
 Thumbs.db
 desktop.ini
 
-# Local environment overrides
+# Local environment overrides (SMTP/FIRMS secrets) and the email recipient list
 .env
 .env.*
+mailing_list.json

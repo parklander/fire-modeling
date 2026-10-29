@@ -4,7 +4,10 @@
   const form = document.getElementById("controls");
   const doc = document.getElementById("doc");
   const params = new URLSearchParams(location.search);
-  let R = null, chart = null, AOIS = [];
+  let R = null, chart = null, AOIS = [], ALERTS = null;
+  // forecast version for titles and file names: the RDPS run, e.g. "2026-10-26 12Z"
+  const runTag = (r) => `${r.slice(0, 4)}-${r.slice(4, 6)}-${r.slice(6, 8)} ${r.slice(8, 10)}Z`;
+  const slug = (s) => s.replace(/\W+/g, "-").replace(/^-|-$/g, "");
 
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const n = (v, d = 0) => (v == null || Number.isNaN(+v) ? "—" : (+v).toFixed(d));
@@ -31,7 +34,17 @@
     const i = MB_BOUNDS.findIndex((b) => fwi < b), k = i < 0 ? MB_BOUNDS.length : i;
     return { label: MB_LABELS[k], cls: MB_CLS[k] };
   };
-  const scale = () => form.elements.scale.value;
+  // the Manitoba scale applies only in Manitoba; elsewhere the report uses CWFIS's rating
+  const mbOk = () => !!R?.meta.in_manitoba;
+  let wantScale = "mb";  // the reader's choice, kept while viewing places outside Manitoba
+  const scale = () => (mbOk() ? form.elements.scale.value : "cwfis");
+  function syncScale() {
+    const sel = form.elements.scale;
+    sel.querySelector('option[value="mb"]').disabled = !mbOk();
+    sel.value = mbOk() ? wantScale : "cwfis";
+    sel.title = mbOk() ? "" : "The Manitoba scale applies only to locations in Manitoba";
+  }
+  const noMb = (rows) => rows.filter((r) => mbOk() || r[3] !== "mb");
   // the rating shown in the calendar: Manitoba (from FWI) or CWFIS's own
   const dayRating = (c) => (scale() === "mb" ? mbRating(c.fwi) : c.fdr_label ? { label: c.fdr_label, cls: FDR_CLASS[c.fdr_label] } : null);
 
@@ -146,7 +159,25 @@
     return `<div class="cal">${head}${cells.join("")}</div>`;
   }
 
+  // ECCC public alerts (server polls the battleboard feed or GeoMet for each area of interest)
+  const alertTime = (iso) => new Date(iso).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" });
+  function alertList(area, full = true) {
+    return `<div class="wx-alerts">${area.alerts.map((x) => `<div class="wx-alert lvl-${x.level}"><b>${esc(x.name)}</b>
+      <small>${x.issued ? `issued ${alertTime(x.issued)}` : ""}</small>${full && x.text ? `<p>${esc(x.text.slice(0, 600))}${x.text.length > 600 ? "…" : ""}</p>` : ""}
+      ${x.link || area.page ? `<small><a href="${esc(x.link || area.page)}" target="_blank" rel="noopener">weather.gc.ca ↗</a></small>` : ""}</div>`).join("")}</div>`;
+  }
+  async function fetchAlerts() {
+    try { return await (await fetch("/api/alerts")).json(); } catch (_) { return null; }
+  }
+  function alertsSection() {
+    const area = ALERTS?.areas.find((a) => a.id === form.elements.aoi.value);
+    if (!area) return "";
+    if (!area.alerts.length) return `<p class="wx-none">No ECCC weather alerts in effect${area.region ? ` for ${esc(area.region)}` : ""} (checked ${alertTime(area.checked)}).</p>`;
+    return `<h3>ECCC alerts in effect</h3>${alertList(area)}`;
+  }
+
   function render() {
+    syncScale();
     const m = R.meta, cwDays = R.days.filter((d) => d.cwfis), rdDays = R.days.filter((d) => d.rdps);
     const name = form.elements.name.value;
     const runName = `${m.run.slice(8)}Z ${m.run.slice(0, 4)}-${m.run.slice(4, 6)}-${m.run.slice(6, 8)}`;
@@ -164,10 +195,11 @@
         <div><span>RDPS FWI1987 start</span>${esc(m.seed.source)}, ${dayLabel(m.seed.date)}</div>
       </div>
       <div class="units">Daily values are for 1200 local standard time unless noted. Winds 10 m, km/h, direction the wind blows from.</div>
+      ${alertsSection()}
       ${tiles}
 
       <h2><span class="num">1</span>CWFIS daily forecast <small class="sub">2 km grid cell, FWI1987</small></h2>
-      ${table(cwDays, CW, (d) => d.cwfis)}
+      ${table(cwDays, noMb(CW), (d) => d.cwfis)}
 
       ${!m.area.included ? "" : `
       <h2><span class="num">${++sec}</span>Fire behaviour potential <small class="sub">fuels within ${n(m.area.radius_km)} km, CWFIS daily values</small></h2>
@@ -181,7 +213,7 @@
       ${rdDays.some((d) => d.fbp_rdps) ? `<h3>Worst case from the RDPS values</h3>${fbpTable(rdDays.filter((d) => d.fbp_rdps), "fbp_rdps")}` : ""}`}
 
       <h2><span class="num">${++sec}</span>RDPS daily detail <small class="sub">10 km model, ${rdDays.length} days</small></h2>
-      ${table(rdDays, RD, (d) => d.rdps)}
+      ${table(rdDays, noMb(RD), (d) => d.rdps)}
       <p class="methods">* Partial: less than 24 h of forecast precedes noon (the run starts after the previous noon), or the calendar day isn't fully covered by the run.</p>
 
       <h2><span class="num">${++sec}</span>Trend</h2>
@@ -192,7 +224,7 @@
         <li>CWFIS: Canadian Wildland Fire Information System daily grids (cwfis.cfs.nrcan.gc.ca, WCS), sampled at the 2 km cell containing the location. Past dates are interpolated observations. From today on the series behaves as CWFIS's forecast; CWFIS doesn't mark the boundary, so this is inferred. (CWFIS's own fire behaviour for the single 2 km cell is in the CSV; section 2 uses all fuels in the area instead.)</li>
         <li>RDPS: ECCC Regional Deterministic Prediction System, nearest 10 km grid point (${n(m.grid_lat, 2)}, ${n(m.grid_lon, 2)}). FWI1987 codes are recomputed daily from the RDPS 1200 LST weather with the cffdrs equations, starting from the CWFIS codes for ${dayLabel(m.seed.date)} (FFMC ${n(m.seed.ffmc, 1)}, DMC ${n(m.seed.dmc, 1)}, DC ${n(m.seed.dc, 0)}).</li>
         <li>FWI2025 values are the hourly next-generation indices (cffdrs-ng) computed for the weather map; they are close to but not the same as FWI1987.</li>
-        <li>Fire danger, Manitoba: from FWI, Low &lt; 14, Moderate &lt; 24, High &lt; 33, Extreme ≥ 33. CWFIS rating: CWFIS's own fire danger class for the 2 km cell. The calendar shows the ${scale() === "mb" ? "Manitoba" : "CWFIS"} scale.</li>
+        <li>${mbOk() ? `Fire danger, Manitoba: from FWI, Low &lt; 14, Moderate &lt; 24, High &lt; 33, Extreme ≥ 33. ` : ""}CWFIS rating: CWFIS's own fire danger class for the 2 km cell. The calendar shows the ${scale() === "mb" ? "Manitoba" : "CWFIS"} scale.${mbOk() ? "" : " (The Manitoba scale is shown only for locations in Manitoba.)"}</li>
         <li>Code and index cells are coloured by the CWFIS danger classes for each code or index.</li>
       </ul>
       <div class="disclaimer">Automated guidance from CWFIS and ECCC model output, for review by a qualified fire weather forecaster.</div>`;
@@ -232,19 +264,21 @@
       "max_mixing", "max_vi", "ffmc", "dmc", "dc", "isi", "bui", "fwi", "dsr", "ffmc2025_max", "isi2025_max", "fwi2025_max"];
     const fuels = R.meta.area.fuels, wKeys = ["label", "ros", "hfi", "hfi_class", "fd", "cfb"];
     const withFbp = R.meta.area.included;
-    const header = ["date", "kind", ...cwKeys.map((k) => `cwfis_${k}`), "cwfis_mb_rating", ...rdKeys.map((k) => `rdps_${k}`), "rdps_mb_rating",
+    const mb = mbOk() ? (v) => [mbRating(v)?.label] : () => [];  // Manitoba-scale columns only in Manitoba
+    const header = ["date", "kind", ...cwKeys.map((k) => `cwfis_${k}`), ...(mbOk() ? ["cwfis_mb_rating"] : []),
+      ...rdKeys.map((k) => `rdps_${k}`), ...(mbOk() ? ["rdps_mb_rating"] : []),
       ...(withFbp ? [...wKeys.map((k) => `worst_cwfis_${k}`), ...wKeys.map((k) => `worst_rdps_${k}`),
         ...fuels.flatMap((f) => [`hfi_cwfis_${f.fuel}_${f.code}`, `ros_cwfis_${f.fuel}_${f.code}`])] : [])];
     const cell = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
     const lines = [header.join(",")].concat(R.days.map((d) =>
-      [d.date, d.kind, ...cwKeys.map((k) => d.cwfis?.[k]), mbRating(d.cwfis?.fwi)?.label,
-        ...rdKeys.map((k) => d.rdps?.[k]), mbRating(d.rdps?.fwi)?.label,
+      [d.date, d.kind, ...cwKeys.map((k) => d.cwfis?.[k]), ...mb(d.cwfis?.fwi),
+        ...rdKeys.map((k) => d.rdps?.[k]), ...mb(d.rdps?.fwi),
         ...(withFbp ? [...wKeys.map((k) => d.fbp_cwfis?.worst[k]), ...wKeys.map((k) => d.fbp_rdps?.worst[k]),
           ...fuels.flatMap((f) => [d.fbp_cwfis?.by_fuel[f.code]?.hfi, d.fbp_cwfis?.by_fuel[f.code]?.ros])] : [])].map(cell).join(",")));
     const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
     const a = Object.assign(document.createElement("a"), {
       href: URL.createObjectURL(blob),
-      download: `fire-weather-${(form.elements.name.value || "point").replace(/\W+/g, "-")}-${R.meta.today}.csv`,
+      download: `fire-weather-${slug(form.elements.name.value || "point")}-${runTag(R.meta.run).replace(" ", "-")}.csv`,
     });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -266,11 +300,13 @@
     history.replaceState(null, "", "?" + (f.aoi.value ? new URLSearchParams({ aoi: f.aoi.value }) : new URLSearchParams({ lat: f.lat.value, lon: f.lon.value, name: f.name.value })));
     doc.innerHTML = `<p class="loading">Building forecast… (CWFIS grids take a few seconds)</p>`;
     try {
-      const r = await fetch(`/api/firewx?${q}`);
+      const [r, al] = await Promise.all([fetch(`/api/firewx?${q}`), fetchAlerts()]);
+      ALERTS = al;
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || r.statusText);
       R = d;
-      document.title = `${f.name.value || "Fire weather"} – Fire Weather Forecast`;
+      // the title is the browser's default file name for Print → Save as PDF
+      document.title = `${f.name.value || "Fire weather"} – Fire Weather Forecast – ${runTag(R.meta.run)}`;
       render();
     } catch (e) {
       doc.innerHTML = `<p class="error">Couldn't build the forecast: ${esc(e.message)}</p>`;
@@ -296,9 +332,12 @@
   // saved per browser: danger scale and whether to include fire behaviour
   try {
     const prefs = JSON.parse(localStorage.getItem("fw-firewx") || "{}");
-    if (prefs.scale) form.elements.scale.value = prefs.scale;
+    if (prefs.scale) form.elements.scale.value = wantScale = prefs.scale;
     form.elements.fbp.checked = !!prefs.fbp;
   } catch (_) {}
+  // ?fbp=1&scale=cwfis override the saved choices (used by the emailed PDF)
+  if (params.has("fbp")) form.elements.fbp.checked = params.get("fbp") === "1";
+  if (["mb", "cwfis"].includes(params.get("scale"))) form.elements.scale.value = wantScale = params.get("scale");
   const savePrefs = () => {
     try { localStorage.setItem("fw-firewx", JSON.stringify({ scale: form.elements.scale.value, fbp: form.elements.fbp.checked })); } catch (_) {}
   };
@@ -307,7 +346,7 @@
     el.querySelector("input").disabled = !form.elements.fbp.checked;
   });
   syncFbpOpts();
-  form.elements.scale.addEventListener("change", () => { savePrefs(); if (R) render(); });  // no refetch needed
+  form.elements.scale.addEventListener("change", () => { wantScale = form.elements.scale.value; savePrefs(); if (R) render(); });  // no refetch needed
   form.elements.fbp.addEventListener("change", () => { savePrefs(); syncFbpOpts(); load(); });
   form.elements.aoi.addEventListener("change", (e) => { if (applyAOI(e.target.value)) load(); });
   for (const k of ["lat", "lon"]) form.elements[k].addEventListener("input", () => { form.elements.aoi.value = ""; });

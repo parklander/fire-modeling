@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fire Weather Forecast</title>
-<link rel="stylesheet" href="/static/report.css?v=5">
+<link rel="stylesheet" href="/static/report.css?v=10">
 <style>
   /* daily calendar: 7 weekday columns, one row per week */
   .cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; margin: 14px 0 4px; }
@@ -26,7 +26,14 @@
     .cal-day .s { font-size: 9.5px; }
     .cal-day .r { font-size: 10.5px; }
   }
-  @media print { .cal-day { break-inside: avoid; } }
+  @media print {
+    .cal-day { break-inside: avoid; }
+    /* long tables may continue on the next page (between rows, header repeated) instead of leaving a gap */
+    table.fx { break-inside: auto; }
+    table.fx tr { break-inside: avoid; }
+    table.fx tr.sect { break-after: avoid; }  /* keep a section label with its first row */
+    table.fx thead { display: table-header-group; }
+  }
   .c0 { background: #dbe8fb; } .c1 { background: #dcf3e2; } .c1b { background: #c6ebd0; }
   .c2 { background: #fff3b8; } .c3 { background: #ffdcb0; } .c4 { background: #ffcfca; } .c5 { background: #f4a9a1; }
   td.c0, td.c1, td.c1b, td.c2, td.c3, td.c4, td.c5 { font-weight: 600; }
@@ -63,6 +70,6 @@
 <main id="doc" class="doc"><p class="loading">Building forecast… (CWFIS grids take a few seconds)</p></main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="/static/firewx.js?v=5"></script>
+<script src="/static/firewx.js?v=10"></script>
 </body>
 </html>

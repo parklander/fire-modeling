@@ -16,6 +16,10 @@
       [0, "#24405e", 0.25], [10, "#3f7f9e", 0.6], [20, "#58b3a0"], [30, "#a7d36b"], [40, "#f2e05a"],
       [50, "#f7a541"], [60, "#ec5f30"], [80, "#c2185b"], [100, "#7b1fa2"], [130, "#e1bee7"]],
       ticks: [0, 20, 40, 60, 80, 100] },
+    // cloud: like a satellite picture on the dark base, clear transparent to overcast near-white
+    cloud: { min: 0, max: 100, stops: [
+      [0, "#9aa5b1", 0], [10, "#c9d1da", 0.08], [30, "#d9dee5", 0.3], [60, "#e6eaef", 0.58], [85, "#f1f4f7", 0.8],
+      [100, "#ffffff", 0.9]], ticks: [0, 25, 50, 75, 100] },
     precip: { min: 0, max: 100, log: true, stops: [
       [0, "#000000", 0], [0.2, "#c7e9c0", 0.45], [1, "#86cf7a"], [2.5, "#3fae55"], [5, "#2a8f8f"],
       [10, "#2f6db5"], [20, "#3b3ea8"], [35, "#7a2fa8"], [50, "#b62f8f"], [75, "#e0527a"],
@@ -42,11 +46,105 @@
     // no CWFIS classes for the grassland FWI: continuous
     gfwi: { min: 0, max: 40, stops: [[0, "#2b6fe0", 0.35], [5, "#2fbf4f"], [10, "#a7d36b"], [15, "#f5e33b"], [25, "#e0a000"], [35, "#ff2a1a"], [50, "#9c1aff"]], ticks: [0, 10, 20, 30, 40] },
   });
+  // Continuous alternative for the FWI-system class ramps: the same CWFIS colours, each placed at the middle of its
+  // class and blended in between; above the top class it deepens to dark red. [min, max] of the ramp per index.
+  const CONT_RANGE = { fwi: [0, 50], isi: [0, 25], ffmc: [50, 100], bui: [0, 120], dmc: [0, 100], dc: [0, 700] };
+  const CONT = {};
+  function continuousOf(v) {
+    if (CONT[v]) return CONT[v];
+    const [min, max] = CONT_RANGE[v], cl = RAMPS[v].classes, n = cl.length;
+    const up = cl.map(([u]) => u), lastFinite = up[n - 2], step = up[n - 2] - up[n - 3];
+    const stops = [[min, cl[0][1]]];
+    cl.forEach(([u, col], i) => {
+      const lo = i === 0 ? min : up[i - 1], hi = u === Infinity ? lastFinite + step : u;
+      stops.push([(lo + hi) / 2, col]);
+    });
+    stops.push([max, "#7a0a1a"]);
+    return (CONT[v] = { min, max, stops, ticks: [min, ...up.slice(0, n - 1), max], continuous: true });
+  }
+  const hasScaleChoice = (v) => v in CONT_RANGE;
+  // the ramp the map uses for a layer: CWFIS classes, or the continuous version when chosen
+  const rampFor = (v) => (S.fwiScale === "continuous" && hasScaleChoice(v) ? continuousOf(v) : RAMPS[v]);
+
+  // Precipitation rate (mm/h) coloured by type: one intensity ramp per type, transparent where dry.
+  // Index = type code from the server: 1 rain, 2 rain/snow mix, 3 freezing rain, 4 ice pellets, 5 snow.
+  const PTYPE = [
+    null,
+    { key: "Rain", stops: [[0.05, "#9ec9ea", 0.35], [0.5, "#4a90d9", 0.8], [2, "#2a4fc8"], [5, "#a23bc4"], [10, "#f2c94c"], [25, "#ff4a3d"]] },
+    { key: "Mix", stops: [[0.05, "#f3c4e8", 0.4], [0.5, "#e590d6", 0.85], [2, "#cc4fbd"], [5, "#8e2386"]] },
+    { key: "Frz rain", stops: [[0.05, "#ffb3a8", 0.5], [0.5, "#ff7a6b", 0.9], [2, "#e5322a"], [5, "#a30d0d"]] },
+    { key: "Pellets", stops: [[0.05, "#ffd9a0", 0.5], [0.5, "#ffb760", 0.9], [2, "#f08a1c"], [5, "#c25e00"]] },
+    { key: "Snow", stops: [[0.05, "#eefaff", 0.4], [0.5, "#c4efff", 0.85], [2, "#7fd6f2"], [5, "#2fb0d6"]] },
+  ];
+  const PT_MID = PTYPE.map((p) => p && p.stops[2][1]);  // one colour per type for chart bars
+  let PT_LUTS = null;
+  function precipLuts() {  // per type: prate uint16 code -> RGBA
+    if (PT_LUTS) return PT_LUTS;
+    const spec = meta.variables.prate;
+    PT_LUTS = PTYPE.map((p) => {
+      const out = new Uint32Array(65536);
+      if (!p) return out;  // type 0 / nodata: transparent
+      const ramp = { stops: p.stops };
+      for (let q = 1; q < 65536; q++) {
+        const v = (q - 1) / spec.scale + spec.offset;
+        if (v < 0.05) continue;
+        const [r, g, b, a] = rampColor(ramp, Math.min(v, 30));
+        out[q] = ((Math.round(a * 255) << 24) | (Math.round(b) << 16) | (Math.round(g) << 8) | Math.round(r)) >>> 0;
+      }
+      return out;
+    });
+    return PT_LUTS;
+  }
+  const ptName = (t) => meta.ptype_names?.[t] ?? "—";
+
+  // ---- GOES-East satellite layers (ECCC GeoMet WMS): observed images, 1 km, every 10 min, ~2 days kept ----------
+  const SAT = {
+    sat_fire: { key: "fire", title: "GOES-East fire temperature",
+      desc: "<b>Active fires</b> show as red (small or cooler) through orange and yellow to near-white (large, very hot). "
+        + "Surfaces and clouds are muted. By day an RGB of shortwave-infrared bands; at night shortwave infrared, where fires are bright spots." },
+    sat_smoke: { key: "smoke", title: "GOES-East smoke",
+      desc: "By day the blue band, which smoke scatters strongly: <b>smoke shows as a grey-white haze</b>, thicker smoke brighter; "
+        + "cloud is also bright but sharper-edged and textured. At night shortwave infrared (smoke isn't visible at night)." },
+  };
+  for (const k of Object.keys(SAT)) RAMPS[k] = { sat: true };
+  const isSat = (v) => v in SAT;
+  let GOES = null, satLayer = null;
+  async function loadGoes() {
+    try { GOES = await (await fetch("/api/goes")).json(); } catch (_) { return; }
+    if (isSat(S.layer)) updateSat();
+  }
+  // the image time for the displayed hour: on GeoMet's 10-min grid, within its window (forecast hours: the latest)
+  function satTime() {
+    const t = GOES?.layers?.[SAT[S.layer].key];
+    if (!t) return null;
+    const step = t.step_min * 60e3, start = Date.parse(t.start), end = Date.parse(t.end);
+    const want = Math.floor(validMs() / step) * step;
+    const ms = Math.max(start, Math.min(end, want));
+    return { iso: new Date(ms).toISOString().replace(".000Z", "Z"), latest: want >= end, oldest: want < start, layer: t.layer };
+  }
+  function updateSat() {
+    if (!isSat(S.layer)) { if (satLayer) { satLayer.remove(); satLayer = null; } return; }
+    const st = satTime();
+    if (!st) { $("legend-desc").innerHTML = SAT[S.layer].desc + "<br><i>Satellite image times unavailable.</i>"; return; }
+    if (!satLayer || satLayer.options.layers !== st.layer) {
+      if (satLayer) satLayer.remove();
+      satLayer = L.tileLayer.wms(GOES.wms, { layers: st.layer, format: "image/png", transparent: true, version: "1.3.0",
+        time: st.iso, opacity: S.opacity, zIndex: 5, attribution: "GOES-East imagery: ECCC GeoMet" }).addTo(map);
+    } else if (satLayer.wmsParams.time !== st.iso) {
+      satLayer.setParams({ time: st.iso });
+    }
+    const when = new Date(st.iso).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    $("legend-desc").innerHTML = `${SAT[S.layer].desc}<br><b>Image ${when}</b>`
+      + (st.latest ? " (latest available: forecast hours show the most recent image)" : st.oldest ? " (oldest kept: about 2 days)" : "");
+  }
+
   const LAYERS = [
     { id: "temp", name: "Temperature", group: "Weather" },
     { id: "rh", name: "Humidity", group: "Weather" },
     { id: "wspd", name: "Wind", group: "Weather" },
     { id: "precip", name: "Precip (accum.)", group: "Weather" },
+    { id: "prate", name: "Precip rate", group: "Weather" },
+    { id: "cloud", name: "Cloud cover", group: "Weather" },
     { id: "gust", name: "Gusts", group: "Weather" },
     { id: "pbl", name: "Mixing ht", group: "Smoke" },
     { id: "twspd", name: "Transport wind", group: "Smoke" },
@@ -58,8 +156,10 @@
     { id: "dmc", name: "DMC", group: "FWI2025" },
     { id: "dc", name: "DC", group: "FWI2025" },
     { id: "gfwi", name: "Grass FWI", group: "FWI2025" },
+    { id: "sat_fire", name: "Fire temperature", group: "Satellite (GOES-East)" },
+    { id: "sat_smoke", name: "Smoke", group: "Satellite (GOES-East)" },
   ];
-  const READOUT_VARS = ["temp", "rh", "wspd", "wdir", "precip", "ffmc", "isi", "bui", "fwi"];
+  const READOUT_VARS = ["temp", "rh", "wspd", "wdir", "precip", "prate", "ptype", "cloud", "ffmc", "isi", "bui", "fwi"];
   function badge(v, val) {
     if (isNaN(val)) return "—";
     const c = RAMPS[v].classes.find(([u]) => val <= u);
@@ -72,12 +172,12 @@
   const { width: W, height: H, bounds: B } = meta;
   const S = {
     runs: [], run: null, hour: 0, layer: "rh", playing: false,
-    wind: "particles", opacity: 0.75, point: null, followLatest: true,
+    wind: "particles", opacity: 0.75, point: null, followLatest: true, fwiScale: "classes", synoptic: false, synKey: false,
   };
   try { Object.assign(S, JSON.parse(localStorage.getItem("fw-prefs") || "{}"), { playing: false, point: null }); } catch (_) {}
   if (!["particles", "arrows", "off"].includes(S.wind)) S.wind = "particles";
   if (S.wind === "particles" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) S.wind = "arrows";
-  const savePrefs = () => { try { localStorage.setItem("fw-prefs", JSON.stringify({ layer: S.layer, wind: S.wind, opacity: S.opacity })); } catch (_) {} };
+  const savePrefs = () => { try { localStorage.setItem("fw-prefs", JSON.stringify({ layer: S.layer, wind: S.wind, opacity: S.opacity, fwiScale: S.fwiScale, synoptic: S.synoptic, synKey: S.synKey, firms: S.firms })); } catch (_) {} };
 
   const $ = (id) => document.getElementById(id);
   const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -115,8 +215,9 @@
   }
   const LUTS = {};
   function lut(v) {
-    if (LUTS[v]) return LUTS[v];
-    const spec = meta.variables[v], ramp = RAMPS[v];
+    const ramp = rampFor(v), key = ramp.continuous ? `${v}:cont` : v;
+    if (LUTS[key]) return LUTS[key];
+    const spec = meta.variables[v];
     const out = new Uint32Array(65536);
     const top = ramp.classes ? Infinity : ramp.stops.at(-1)[0];
     const maxCode = Math.min(65535, Math.ceil((top - spec.offset) * spec.scale) + 1);
@@ -125,7 +226,7 @@
       const [r, g, b, a] = rampColor(ramp, val);
       out[q] = ((Math.round(a * 255) << 24) | (Math.round(b) << 16) | (Math.round(g) << 8) | Math.round(r)) >>> 0;
     }
-    return (LUTS[v] = out);
+    return (LUTS[key] = out);
   }
 
   // ---- frame cache ----------------------------------------------------------
@@ -177,19 +278,105 @@
   wind.setMode(S.wind);
   const windVars = () => (S.layer === "twspd" ? ["twspd", "twdir"] : ["wspd", "wdir"]);
 
+  // ---- FIRMS hotspots overlay (same styling as the fire growth page): above any layer, wind and synoptic -----
+  map.createPane("hotspots").style.zIndex = 470;  // above the wind (450) and synoptic (455) canvases, below labels
+  const hotRenderer = L.canvas({ pane: "hotspots", padding: 0.3 });
+  const hotLayer = L.layerGroup().addTo(map);
+  const hoursAgo = (iso) => (Date.now() - Date.parse(iso)) / 3600e3;
+  const ageColour = (iso) => (hoursAgo(iso) < 6 ? "#ff3b1f" : hoursAgo(iso) < 24 ? "#ff9f1c" : "#ffd166");
+  async function loadHotspots() {
+    hotLayer.clearLayers();
+    $("firms-note").hidden = !S.firms;
+    if (!S.firms) return;
+    let d;
+    try { d = await (await fetch("/api/hotspots?hours=48")).json(); } catch (_) { return; }
+    if (!S.firms) return;
+    const clock = (iso) => new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    let fresh = 0;
+    for (const h of d.detections) {
+      if (!h.persistent && !h.low_conf) fresh++;
+      L.circleMarker([h.lat, h.lon], {
+        renderer: hotRenderer, pane: "hotspots", radius: h.persistent ? 2.5 : 4, weight: 1,
+        color: h.persistent ? "#8a939c" : "#2b0d00", fillColor: h.persistent ? "#8a939c" : ageColour(h.time),
+        fillOpacity: h.low_conf ? 0.25 : 0.9,
+      }).bindTooltip(`${h.sensor} · ${clock(h.time)} · FRP ${h.frp == null ? "—" : h.frp.toFixed(1)} MW`
+        + (h.persistent ? " · persistent heat source (excluded)" : "") + (h.low_conf ? " · low confidence" : ""))
+        .addTo(hotLayer);
+    }
+    const st = d.status || {};
+    $("firms-note").innerHTML = `<b>FIRMS</b> ${fresh} detections, last 48 h`
+      + `${st.last_poll ? ` · polled ${new Date(st.last_poll).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}` : ""}<br>`
+      + `<i class="hs-dot" style="background:#ff3b1f"></i>&lt; 6 h<i class="hs-dot" style="background:#ff9f1c"></i>&lt; 24 h`
+      + `<i class="hs-dot" style="background:#ffd166"></i>older<i class="hs-dot" style="background:#8a939c;border-color:#8a939c"></i>persistent (industrial)`;
+  }
+  // ---- synoptic overlay: RDPS isobars + H/L every hour, WPC fronts at their valid times ----------
+  const syn = SynopticLayer(map, $("synoptic"), meta);
+  let FRONTS = null, synKey = null;
+  async function loadFronts() {
+    try { FRONTS = await (await fetch("/api/fronts")).json(); } catch (_) { return; }
+    updateSynoptic();
+  }
+  // the WPC set (analysis or day 1-3 forecast) valid within 3 h of the displayed time, if any
+  function frontsFor(ms) {
+    if (!FRONTS) return null;
+    const sets = [FRONTS.analysis && { ...FRONTS.analysis, kind: "analysis", window: 3 },
+      ...(FRONTS.forecast || []).map((f) => ({ ...f, kind: "forecast", window: f.approx_time ? 4 : 3 }))]
+      .filter((x) => x && x.valid && x.fronts?.length);
+    let best = null;
+    for (const x of sets) {
+      const dh = Math.abs(new Date(x.valid).getTime() - ms) / 3600e3;
+      if (dh <= x.window && (!best || dh < best.dh)) best = { ...x, dh };
+    }
+    return { best, sets };
+  }
+  async function updateSynoptic() {
+    const note = $("syn-note");
+    syn.setVisible(S.synoptic);
+    note.hidden = !S.synoptic;
+    if (!S.synoptic || !S.run) return;
+    const run = S.run, h = S.hour, key = `${run}/${h}`;
+    const q = await getFrame(run, "mslp", h);
+    if (run !== S.run || h !== S.hour) return;
+    if (key !== synKey) { synKey = q ? key : null; syn.setPressure(q); }  // retry later if not downloaded yet
+    const ff = frontsFor(validMs());
+    syn.setFronts(ff?.best || null);
+    const when = (iso) => new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    const avail = (ff?.sets || []).map((x) => (x.kind === "analysis" ? `analysis ${when(x.valid)}` : `day ${x.day} ${x.approx_time ? new Date(x.valid).toLocaleDateString(undefined, { weekday: "short" }) : when(x.valid)}`));
+    note.innerHTML = `<b>Isobars</b> every 4 hPa, H/L: RDPS sea-level pressure${q ? "" : " (not available for this run)"}<br>`
+      + (ff?.best ? `<b>Fronts</b>: ${ff.best.kind === "analysis" ? "WPC surface analysis" : `WPC day ${ff.best.day} forecast`}, valid ${ff.best.approx_time ? new Date(ff.best.valid).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) + " (time not given)" : when(ff.best.valid)}`
+        : `<b>Fronts</b>: none within 3 h of this time${avail.length ? ` (WPC: ${avail.join(", ")})` : ""}`);
+  }
+  // the Key button (explains isobars, H/L and front symbols) shows with the overlay; open/closed is remembered
+  function syncKey() {
+    $("syn-key-btn").hidden = !S.synoptic;
+    $("syn-key").hidden = !(S.synoptic && S.synKey);
+    $("syn-key-btn").setAttribute("aria-expanded", String(!$("syn-key").hidden));
+  }
+  $("syn-key-btn").onclick = () => { S.synKey = !S.synKey; savePrefs(); syncKey(); };
+  $("syn-key-close").onclick = () => { S.synKey = false; savePrefs(); syncKey(); };
+  $("synoptic-on").checked = S.synoptic;
+  $("synoptic-on").onchange = (e) => { S.synoptic = e.target.checked; savePrefs(); syncKey(); if (S.synoptic && !FRONTS) loadFronts(); updateSynoptic(); };
+  syncKey();
+
   // ---- rendering ------------------------------------------------------------
   let renderToken = 0;
   async function render() {
     const tok = ++renderToken, run = S.run, h = S.hour, layer = S.layer;
     if (!run) return;
     const [sv, dv] = windVars(), showWind = S.wind !== "off";
-    const [q, spd, dir] = await Promise.all([
-      getFrame(run, layer, h),
+    const sat = isSat(layer);
+    const [q, spd, dir, qt] = await Promise.all([
+      sat ? null : getFrame(run, layer, h),
       showWind ? getFrame(run, sv, h) : null,
       showWind ? getFrame(run, dv, h) : null,
+      layer === "prate" ? getFrame(run, "ptype", h) : null,
     ]);
     if (tok !== renderToken) return;
-    if (q) {
+    if (q && layer === "prate" && qt) {
+      const T = precipLuts();  // ptype code q-1 picks the ramp
+      for (let i = 0; i < q.length; i++) { const t = qt[i] - 1; img32[i] = t > 0 && t < 6 ? T[t][q[i]] : 0; }
+      fctx.putImageData(img, 0, 0);
+    } else if (q && layer !== "prate") {
       const L_ = lut(layer);
       for (let i = 0; i < q.length; i++) img32[i] = L_[q[i]];
       fctx.putImageData(img, 0, 0);
@@ -197,6 +384,8 @@
       fctx.clearRect(0, 0, W, H);
     }
     wind.setFrames(spd, dir, sv, dv);
+    updateSat();
+    updateSynoptic();
     updateReadout();
     prefetch();
   }
@@ -205,7 +394,8 @@
     const idx = hrs.indexOf(S.hour);
     for (let k = 1; k <= 4 && idx >= 0; k++) {
       const h = hrs[(idx + k) % hrs.length];
-      getFrame(run, S.layer, h);
+      if (!isSat(S.layer)) getFrame(run, S.layer, h);
+      if (S.layer === "prate") getFrame(run, "ptype", h);
       if (S.wind !== "off") for (const v of windVars()) getFrame(run, v, h);
     }
     if (!S.playing) for (const v of READOUT_VARS) getFrame(run, v, S.hour);
@@ -217,7 +407,7 @@
   const currentRun = () => S.runs.find((r) => r.run === S.run);
   const isIndex = (v) => meta.variables[v]?.index;
   const BURN_LAYERS = new Set(["gust", "pbl", "twspd", "vi"]);  // hourly to T+48, then 3-hourly
-  const availableHours = () => (isIndex(S.layer) ? currentRun()?.index_hours
+  const availableHours = () => (S.layer === "prate" ? currentRun()?.precip_hours : S.layer === "cloud" ? currentRun()?.cloud_hours : isIndex(S.layer) ? currentRun()?.index_hours
     : BURN_LAYERS.has(S.layer) ? currentRun()?.smoke_hours : currentRun()?.hours) ?? [];
   const fmtLocal = (d) => d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const fmtUTC = (d) => `${String(d.getUTCHours()).padStart(2, "0")}Z ${d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", timeZone: "UTC" })}`;
@@ -309,8 +499,36 @@
 
   // ---- legend ---------------------------------------------------------------
   function drawLegend() {
-    const ramp = RAMPS[S.layer], spec = meta.variables[S.layer];
-    $("legend-title").textContent = spec.units ? `${spec.label} (${spec.units})` : `${spec.label}${ramp.classes ? " · CWFIS classes" : ""}`;
+    const sat = isSat(S.layer);
+    $("legend-bar").hidden = sat; $("legend-ticks").hidden = sat; $("legend-desc").hidden = !sat;
+    if (sat) {
+      $("legend-title").textContent = SAT[S.layer].title;
+      $("legend-scale").hidden = true;
+      updateSat();
+      return;
+    }
+    if (S.layer === "prate") {  // one gradient segment per precipitation type
+      $("legend-title").textContent = "Precip rate by type · each 0.1→10 mm/h";
+      $("legend-scale").hidden = true;
+      const c = $("legend-bar"), ctx = c.getContext("2d"), w = c.width, n = 5, bw = w / n;
+      ctx.clearRect(0, 0, w, c.height);
+      for (let k = 1; k <= n; k++) {
+        for (let x = 0; x < bw - 2; x++) {
+          const v = Math.exp(Math.log(0.1) + (x / (bw - 3)) * (Math.log(10) - Math.log(0.1)));
+          const [r, g, b, a] = rampColor({ stops: PTYPE[k].stops }, v);
+          ctx.fillStyle = `rgba(${r},${g},${b},${Math.max(a, 0.35)})`;
+          ctx.fillRect((k - 1) * bw + x, 0, 1, c.height);
+        }
+      }
+      $("legend-ticks").innerHTML = PTYPE.slice(1).map((p, i) => `<span style="left:${((i + 0.5) / n) * 100}%">${p.key}</span>`).join("");
+      return;
+    }
+    const ramp = rampFor(S.layer), spec = meta.variables[S.layer];
+    $("legend-title").textContent = spec.units ? `${spec.label} (${spec.units})`
+      : `${spec.label}${ramp.classes ? " · CWFIS classes" : ramp.continuous ? " · continuous" : ""}`;
+    const sw = $("legend-scale");
+    sw.hidden = !hasScaleChoice(S.layer);
+    for (const b of sw.querySelectorAll("button")) b.setAttribute("aria-pressed", b.dataset.scale === (S.fwiScale || "classes"));
     const c = $("legend-bar"), ctx = c.getContext("2d"), w = c.width;
     if (ramp.classes) {
       const n = ramp.classes.length, bw = w / n;
@@ -333,13 +551,23 @@
   // ---- variable tabs --------------------------------------------------------
   $("vars").innerHTML = LAYERS.map((l, i) =>
     (i === 0 || LAYERS[i - 1].group !== l.group ? `<span class="group">${l.group}</span>` : "") +
-    `<button role="tab" data-v="${l.id}">${l.name}</button>`).join("");
+    `<button role="tab" data-v="${l.id}">${l.name}</button>`).join("")
+    + `<span class="group">Overlays</span><label class="ov" title="NASA FIRMS satellite fire detections (VIIRS, MODIS), last 48 h">`
+    + `<input type="checkbox" id="ov-firms"> FIRMS hotspots (48 h)</label>`;
+  $("ov-firms").checked = !!S.firms;
+  $("ov-firms").onchange = (e) => { S.firms = e.target.checked; savePrefs(); loadHotspots(); };
+  if (S.firms) loadHotspots();
   function setLayer(v) {
     S.layer = v; savePrefs();
     for (const b of $("vars").querySelectorAll("button")) b.setAttribute("aria-selected", b.dataset.v === v);
     snapHour(); updateTimebar(); drawLegend(); render();
   }
   $("vars").onclick = (e) => e.target.dataset.v && setLayer(e.target.dataset.v);
+  $("legend-scale").onclick = (e) => {
+    const sc = e.target.dataset?.scale;
+    if (!sc || sc === S.fwiScale) return;
+    S.fwiScale = sc; savePrefs(); drawLegend(); render();
+  };
 
   // ---- hover readout --------------------------------------------------------
   let hoverLL = null, hoverXY = null;
@@ -364,6 +592,13 @@
       <span class="k">Wind</span><span class="v">${dir != null ? COMPASS[Math.round(dir / 22.5) % 16] + " " : ""}${g("wspd")} km/h</span>
       <span class="k">Direction</span><span class="v">${dir != null ? Math.round(dir) + "°" : "—"}</span>
       <span class="k">Precip (accum.)</span><span class="v">${g("precip", 1)} mm</span>
+      <span class="k">Precip rate</span><span class="v">${(() => {
+        const r = vals.prate && vals.prate[i] ? decodeVal("prate", vals.prate[i]) : null;
+        const t = vals.ptype && vals.ptype[i] ? Math.round(decodeVal("ptype", vals.ptype[i])) : null;
+        if (r == null) return "—";
+        return t ? `<i class="badge" style="background:${PT_MID[t]}"></i>${ptName(t)} ${r.toFixed(1)} mm/h` : "None";
+      })()}</span>
+      <span class="k">Cloud</span><span class="v">${g("cloud")} %</span>
       <span class="sep"></span>
       <span class="k">FFMC</span><span class="v">${g("ffmc", 1)}</span>
       <span class="k">ISI</span><span class="v">${g("isi", 1)}</span>
@@ -401,7 +636,19 @@
   };
   let mgLocalHours = [];  // local hour of each meteogram point, for the 6-hourly x-axis labels
   let mgValid = [];       // valid time (ISO) of each point, for tooltip titles
+  // Every chart gets a left and a right axis of the same fixed width, so the plot areas (and their time axes) line
+  // up down the panel; a chart with only a left axis gets a blank right one.
+  const AXIS_W = 48;
+  const fixW = (s) => { s.width = AXIS_W; };
+  function sideAxes(extra) {
+    const out = { ...extra };
+    out.y = { ...(out.y || {}), afterFit: fixW };
+    out.y1 = out.y1 ? { ...out.y1, afterFit: fixW }
+      : { position: "right", afterFit: fixW, grid: { display: false }, border: { display: false }, ticks: { display: false } };
+    return out;
+  }
   function baseOpts(extra) {
+    extra = sideAxes(extra);
     return {
       responsive: true, maintainAspectRatio: false, animation: false,
       interaction: { mode: "index", intersect: false },
@@ -442,6 +689,12 @@
     $("meteogram").hidden = false;
     $("mg-title").textContent = S.pointName ? `${S.pointName} · ${lat.toFixed(2)}°, ${lng.toFixed(2)}°` : `${lat.toFixed(3)}°, ${lng.toFixed(3)}°`;
     $("mg-sub").textContent = `Nearest grid point ${d.cell_lat}°, ${d.cell_lon}° · RDPS ${runName(d.run)} · local time`;
+    // front watch: nearest WPC front and its motion, RDPS frontal wind shifts here (filled in when it arrives)
+    fetch(`/api/frontwatch/point?lat=${lat}&lon=${lng}`).then((r) => (r.ok ? r.json() : null)).then((fw) => {
+      if (!S.point || S.point.lat !== lat || S.point.lng !== lng) return;
+      $("mg-front").innerHTML = fw ? frontWatchHtml(fw, { compact: true }) : "";
+      $("mg-front").hidden = !fw;
+    }).catch(() => { $("mg-front").hidden = true; });
     $("mg-fire").href = `/fire?lat=${lat.toFixed(5)}&lon=${lng.toFixed(5)}`;
     const aoi = $("aoi").value;
     $("mg-firewx").href = aoi ? `/static/firewx.html?aoi=${aoi}`
@@ -456,7 +709,9 @@
       return dt.getHours() === 0 ? dt.toLocaleDateString(undefined, { weekday: "short" }) : String(dt.getHours()).padStart(2, "0");
     });
     const s = d.series;
-    const hourly = s.precip.map((v, i) => (i === 0 || v == null || s.precip[i - 1] == null ? null : Math.max(0, +(v - s.precip[i - 1]).toFixed(2))));
+    const hourly = s.precip.map((v, i) => (s.prate?.[i] != null ? s.prate[i]
+      : i === 0 || v == null || s.precip[i - 1] == null ? null : Math.max(0, +(v - s.precip[i - 1]).toFixed(2))));
+    const barColour = hourly.map((v, i) => { const t = Math.round(s.ptype?.[i] ?? 0); return t > 0 ? PT_MID[t] : "rgba(63,174,85,.7)"; });
     for (const c of Object.values(charts)) c.destroy();
 
     charts.trh = new Chart($("ch-trh"), {
@@ -508,11 +763,18 @@
     });
     charts.precip = new Chart($("ch-precip"), {
       data: { labels, datasets: [
-        { type: "bar", label: "Hourly mm", data: hourly, backgroundColor: "rgba(63,174,85,.7)", yAxisID: "y" },
+        { type: "bar", label: "Hourly mm (colour = type)", data: hourly, backgroundColor: barColour, yAxisID: "y" },
         { type: "line", label: "Accumulated mm", data: s.precip, borderColor: "#5f9fe6", backgroundColor: "#5f9fe6", pointRadius: 0, borderWidth: 2, yAxisID: "y1" },
       ] },
       plugins: [cursorPlugin],
-      options: baseOpts({ y: { min: 0, suggestedMax: 1, title: { display: true, text: "mm/h" } }, y1: { position: "right", min: 0, suggestedMax: 5, grid: { display: false }, title: { display: true, text: "mm" } } }),
+      options: (() => {
+        const o = baseOpts({ y: { min: 0, suggestedMax: 1, title: { display: true, text: "mm/h" } }, y1: { position: "right", min: 0, suggestedMax: 5, grid: { display: false }, title: { display: true, text: "mm" } } });
+        Object.assign(o.plugins.tooltip.callbacks, { footer: (items) => {
+          const t = Math.round(s.ptype?.[items[0].dataIndex] ?? 0);
+          return t > 0 ? ptName(t) : "";
+        } });
+        return o;
+      })(),
     });
     for (const c of Object.values(charts)) c.$hours = d.hours;
   }
@@ -532,21 +794,110 @@
 
   // ---- areas of interest -------------------------------------------------------
   let AOIS = [];
+  let aoiOutline = null;  // the selected area's boundary, if it has one
   function selectAOI(id, fly = true) {
     const a = AOIS.find((x) => x.id === id);
     if (!a) return;
     $("aoi").value = id;
     try { localStorage.setItem("fw-aoi", id); } catch (_) {}
+    if (aoiOutline) { aoiOutline.remove(); aoiOutline = null; }
+    if (a.boundary) {
+      aoiOutline = L.polygon(a.boundary, { color: "#ff8a3d", weight: 2, fill: false, dashArray: "6 4", interactive: false }).addTo(map);
+    }
     if (fly) map.setView([a.lat, a.lon], 8);
     selectPoint([a.lat, a.lon], a.name);
+    renderAlerts();
   }
-  $("aoi").onchange = (e) => (e.target.value ? selectAOI(e.target.value) : null);
+  $("aoi").onchange = (e) => {
+    if (e.target.value === "__edit") { location.href = "/static/aoi.html"; return; }
+    if (e.target.value) selectAOI(e.target.value);
+    else { if (aoiOutline) { aoiOutline.remove(); aoiOutline = null; } renderAlerts(); }
+  };
+  // ---- ECCC public alerts at the bases (server polls battleboard feeds / GeoMet) ----
+  const LVL = { warning: 3, watch: 2, statement: 1 };
+  const escH = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const when = (iso) => new Date(iso).toLocaleString("en-CA", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+  let ALERTS = null, alertsDismissed = null, FRONT_ALERTS = [];
+  const alertKey = (a, x) => `${a.id}|${x.name}`;
+  const worst = (list) => list.reduce((w, x) => (LVL[x.level] > LVL[w] ? x.level : w), "statement");
+  function renderAlerts() {
+    if (!ALERTS) return;
+    const active = ALERTS.areas.filter((a) => a.alerts.length);
+    const fa = FRONT_ALERTS;  // model-based front watch alerts (ours, not ECCC's)
+    const chip = $("alert-chip");
+    chip.className = "hdr-link alert-chip" + (fa.length ? " on lvl-warning" : active.length ? ` on lvl-${worst(active.flatMap((a) => a.alerts))}` : "");
+    chip.textContent = [active.length ? `⚠ Alerts: ${active.length} base${active.length > 1 ? "s" : ""}` : "",
+      fa.length ? `⚠ Front: ${[...new Set(fa.map((x) => x.name))].join(", ")}` : ""].filter(Boolean).join(" · ") || "No alerts";
+    const sel = ALERTS.areas.find((a) => a.id === $("aoi").value);
+    const mine = sel?.alerts || [];
+    const key = mine.map((x) => alertKey(sel, x)).join(",");
+    // shown when the selected base has alerts (until closed), or when opened from the chip
+    const panel = $("alerts");
+    const myFront = fa.filter((x) => x.aoi === $("aoi").value);
+    const fkey = key + myFront.map((x) => x.event.time).join(",");
+    if (!panel.dataset.open && ((!mine.length && !myFront.length) || alertsDismissed === fkey)) { panel.hidden = true; return; }
+    const others = active.filter((a) => a !== sel);
+    const checked = sel?.checked || ALERTS.areas[0]?.checked;
+    const item = (x) => `<div class="wx-alert lvl-${x.level}"><div class="n">${escH(x.name)}</div>
+        <div class="sub">${x.issued ? `Issued ${when(x.issued)}` : ""}${x.expires ? ` · expires ${when(x.expires)}` : ""}</div>
+        ${x.text ? `<div class="t">${escH(x.text)}</div>` : ""}
+        ${x.link || sel.page ? `<div class="sub"><a href="${escH(x.link || sel.page)}" target="_blank" rel="noopener">Full text on weather.gc.ca ↗</a></div>` : ""}</div>`;
+    panel.innerHTML = `
+      <div class="al-head"><b>ECCC alerts${sel ? ` · ${escH(sel.name)}` : ""}</b><button class="icon" id="al-close" aria-label="Close">×</button></div>
+      ${sel ? (mine.length ? mine.map(item).join("") : `<div class="sub">No alerts in effect${sel.region ? ` for ${escH(sel.region)}` : ""}.${sel.page ? ` <a href="${escH(sel.page)}" target="_blank" rel="noopener">Check on weather.gc.ca ↗</a>` : ""}</div>`)
+        : `<div class="sub">Pick a base to see its alerts.</div>`}
+      ${fa.length ? `<div class="others"><div class="sub">Front watch (RDPS forecast, not an ECCC alert)</div>${fa.map((x) =>
+        `<div class="wx-alert lvl-warning"><div class="n">Frontal wind shift · ${escH(x.name)}</div>
+          <div class="t">${when(x.event.time)}: ${escH(x.event.from_card)} ${x.event.from_speed} → ${escH(x.event.to_card)} ${x.event.to_speed} km/h, max ${x.event.max_wind}${x.event.max_gust != null ? `, gusts ${x.event.max_gust}` : ""}</div></div>`).join("")}</div>` : ""}
+      ${others.length ? `<div class="others"><div class="sub">Other bases</div>${others.map((a) =>
+        `<button data-id="${escH(a.id)}" class="lvl-${worst(a.alerts)}"><b>⚠</b> ${escH(a.name)}: ${escH(a.alerts.map((x) => x.name).join(", "))}</button>`).join("")}</div>` : ""}
+      <div class="foot"><span class="sub">${sel?.source ? `${escH(sel.source)}${sel.feed ? ` (${escH(sel.feed)})` : ""} · ` : ""}checked ${checked ? new Date(checked).toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit", hour12: false }) : "—"}</span>
+        ${"Notification" in window && Notification.permission === "default" ? `<button id="al-notify" title="Show a desktop notification when a new alert is issued for a base (while this page is open)">Notify me</button>` : ""}</div>`;
+    panel.hidden = false;
+    $("al-close").onclick = () => { delete panel.dataset.open; alertsDismissed = fkey; panel.hidden = true; };
+    panel.querySelectorAll(".others button").forEach((b) => (b.onclick = () => selectAOI(b.dataset.id)));
+    const nb = $("al-notify");
+    if (nb) nb.onclick = () => Notification.requestPermission().then(renderAlerts);
+  }
+  $("alert-chip").onclick = () => {
+    const panel = $("alerts");
+    if (panel.hidden) { panel.dataset.open = "1"; renderAlerts(); }
+    else { delete panel.dataset.open; panel.hidden = true; }
+  };
+  async function loadFrontAlerts() {
+    let d;
+    try { d = await (await fetch("/api/frontalerts")).json(); } catch (_) { return; }
+    const seen = new Set(FRONT_ALERTS.map((x) => `${x.id}|${x.event.time}`)), first = loadFrontAlerts.done !== true;
+    FRONT_ALERTS = d.active || [];
+    loadFrontAlerts.done = true;
+    if (!first && "Notification" in window && Notification.permission === "granted") {
+      for (const x of FRONT_ALERTS) if (!seen.has(`${x.id}|${x.event.time}`)) {
+        new Notification(`Frontal wind shift: ${x.name}`, {
+          body: `${when(x.event.time)}: ${x.event.from_card} ${x.event.from_speed} → ${x.event.to_card} ${x.event.to_speed} km/h${x.event.max_gust != null ? `, gusts ${x.event.max_gust}` : ""}`,
+          tag: `front|${x.id}|${x.event.time}` });
+      }
+    }
+    renderAlerts();
+  }
+  async function loadAlerts() {
+    let d;
+    try { d = await (await fetch("/api/alerts")).json(); } catch (_) { return; }
+    const seen = ALERTS && new Set(ALERTS.areas.flatMap((a) => a.alerts.map((x) => alertKey(a, x))));
+    ALERTS = d;
+    if (seen && "Notification" in window && Notification.permission === "granted") {
+      for (const a of d.areas) for (const x of a.alerts) {
+        if (!seen.has(alertKey(a, x))) new Notification(`${a.name}: ${x.name}`, { body: (x.text || "").slice(0, 200), tag: alertKey(a, x) });
+      }
+    }
+    renderAlerts();
+  }
   async function loadAOIs() {
     try {
       const d = await (await fetch("/api/aoi")).json();
       AOIS = d.areas;
       $("aoi").innerHTML = `<option value="">Custom point</option>` +
-        AOIS.map((a) => `<option value="${a.id}">${a.name}${a.prov ? ` (${a.prov})` : ""}</option>`).join("");
+        AOIS.map((a) => `<option value="${a.id}">${a.name}${a.prov ? ` (${a.prov})` : ""}</option>`).join("") +
+        `<option value="__edit">Edit areas…</option>`;
       let saved = null;
       try { saved = localStorage.getItem("fw-aoi"); } catch (_) {}
       return AOIS.some((a) => a.id === saved) ? saved : d.default;
@@ -565,7 +916,7 @@
   $("wind-mode").value = S.wind;
   $("wind-mode").onchange = (e) => { S.wind = e.target.value; savePrefs(); wind.setMode(S.wind); render(); };
   $("opacity").value = S.opacity;
-  $("opacity").oninput = (e) => { S.opacity = +e.target.value; overlay.setOpacity(S.opacity); savePrefs(); };
+  $("opacity").oninput = (e) => { S.opacity = +e.target.value; overlay.setOpacity(S.opacity); satLayer?.setOpacity(S.opacity); savePrefs(); };
   let playTimer = null;
   function setPlaying(on) {
     S.playing = on;
@@ -591,6 +942,9 @@
     es.onerror = () => { $("live-dot").className = "dot down"; $("live-dot").title = "Live feed disconnected, retrying…"; };
     es.onmessage = (m) => {
       const ev = JSON.parse(m.data);
+      if (ev.type === "alerts") { loadAlerts(); return; }
+      if (ev.type === "frontalerts") { loadFrontAlerts(); return; }
+      if (ev.type === "incidents") { if (S.firms) loadHotspots(); return; }  // after each FIRMS poll
       clearTimeout(refreshPending);
       refreshPending = setTimeout(async () => {
         const before = availableHours().length, prevRun = S.run;
@@ -608,5 +962,13 @@
   S.followLatest = true;
   render();
   if (startAOI) selectAOI(startAOI);
+  loadAlerts();
+  loadFrontAlerts();
+  loadGoes();
+  setInterval(loadGoes, 5 * 60 * 1000);  // a new image every 10 min
+  setInterval(loadFrontAlerts, 10 * 60 * 1000);
+  setInterval(loadAlerts, 5 * 60 * 1000);  // backstop in case an SSE push is missed
+  if (S.synoptic) loadFronts();
+  setInterval(() => S.synoptic && loadFronts(), 15 * 60 * 1000);  // WPC issues every 3 h
   connectEvents();
 })();

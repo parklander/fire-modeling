@@ -3,7 +3,13 @@
   "use strict";
   const form = document.getElementById("controls");
   const doc = document.getElementById("doc");
-  let R = null, map = null;
+  let R = null, map = null, ALERTS = null, FW = null;
+  // version for titles and file names: issue time in central time, e.g. "2026-10-26 0937 CT"
+  const issueTag = () => {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Winnipeg", year: "numeric", month: "2-digit",
+      day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(R.issued)).map((x) => [x.type, x.value]));
+    return `${p.year}-${p.month}-${p.day} ${p.hour}${p.minute} CT`;
+  };
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const n = (v, d = 0) => (v == null || Number.isNaN(+v) ? "—" : (+v).toFixed(d));
   const COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
@@ -31,6 +37,33 @@
     return out.map((r) => (r.start === r.end ? w(r.start) : `${w(r.start)}–${w(r.end)}`)).join(", ");
   }
   const critLabel = (k) => R.criteria.find((c) => c.key === k)?.label || k;
+
+  // ECCC public alerts (server polls the battleboard feed or GeoMet for each area of interest)
+  const alertTime = (iso) => new Date(iso).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" });
+  function alertList(area, full = true) {
+    return `<div class="wx-alerts">${area.alerts.map((x) => `<div class="wx-alert lvl-${x.level}"><b>${esc(x.name)}</b>
+      <small>${x.issued ? `issued ${alertTime(x.issued)}` : ""}</small>${full && x.text ? `<p>${esc(x.text.slice(0, 600))}${x.text.length > 600 ? "…" : ""}</p>` : ""}
+      ${x.link || area.page ? `<small><a href="${esc(x.link || area.page)}" target="_blank" rel="noopener">weather.gc.ca ↗</a></small>` : ""}</div>`).join("")}</div>`;
+  }
+  async function fetchAlerts() {
+    try { return await (await fetch("/api/alerts")).json(); } catch (_) { return null; }
+  }
+  function alertFindings() {
+    if (!ALERTS) return "";
+    const active = ALERTS.areas.filter((a) => a.alerts.length);
+    const checked = ALERTS.areas[0]?.checked;
+    if (!active.length) return `<p class="wx-none">No ECCC weather alerts in effect at any establishment${checked ? ` (checked ${alertTime(checked)})` : ""}.</p>`;
+    return `<h3>ECCC alerts in effect now</h3>${active.map((a) => `<div><b>${esc(a.name)}</b> (${esc(a.prov)})${alertList(a, false)}</div>`).join("")}`;
+  }
+
+  // frontal wind shifts forecast at any establishment in the next 48 h (RDPS), with the WPC front's approach
+  function frontFindings() {
+    if (!FW) return "";
+    const hit = FW.bases.filter((b) => b.level);
+    if (!hit.length) return `<p class="wx-none">No frontal wind shift forecast at any establishment in the next 48 h (RDPS).</p>`;
+    return `<h3>Frontal wind shifts, next 48 h</h3>${hit.sort((a, b) => (a.level === "warning" ? -1 : 1) - (b.level === "warning" ? -1 : 1))
+      .map((b) => `<div class="fw-base"><b>${esc(b.name)}</b> (${esc(b.prov)})${frontWatchHtml(b, { compact: true })}</div>`).join("")}`;
+  }
 
   function findings() {
     const flagged = R.bases.filter((b) => b.severity > 0).sort((a, b) => b.severity - a.severity || (b.max_fwi ?? 0) - (a.max_fwi ?? 0));
@@ -83,6 +116,8 @@
 
       <h2><span class="num">1</span>Key findings</h2>
       ${findings()}
+      ${alertFindings()}
+      ${frontFindings()}
 
       <h2><span class="num">2</span>Overview map <small class="sub">status for the period</small></h2>
       <div id="map"></div>
@@ -142,7 +177,7 @@
     }
     const a = Object.assign(document.createElement("a"), {
       href: URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/csv" })),
-      download: `national-fire-weather-${R.dates[0]}.csv`,
+      download: `national-fire-weather-${issueTag().replace(" ", "-").replace(" CT", "")}.csv`,
     });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -151,10 +186,13 @@
   async function load() {
     doc.innerHTML = `<p class="loading">Building the national summary… (CWFIS grids for every base; about 15 s the first time)</p>`;
     try {
-      const r = await fetch("/api/national");
+      const [r, al, fw] = await Promise.all([fetch("/api/national"), fetchAlerts(),
+        fetch("/api/frontwatch").then((x) => (x.ok ? x.json() : null)).catch(() => null)]);
+      ALERTS = al; FW = fw;
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || r.statusText);
       R = d;
+      document.title = `National Fire Weather Summary – ${issueTag()}`;
       render();
     } catch (e) {
       doc.innerHTML = `<p class="error">Couldn't build the summary: ${esc(e.message)}</p>`;

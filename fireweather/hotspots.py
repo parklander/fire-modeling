@@ -258,16 +258,22 @@ class Hotspots:
         log.info("incident %s simulated in %.1fs (%s)", iid, time.time() - t0, err or "ok")
         return summary, err
 
-    def loop(self, stop, on_update=None):
+    def loop(self, stop, on_update=None, on_poll=None):
         while not stop.is_set():
             try:
                 self.poll()
+                if on_poll:  # before the (slower) growth runs
+                    on_poll()
                 self.auto_simulate()
                 if on_update:
                     on_update()
             except Exception:
                 log.exception("hotspot cycle failed")
             stop.wait(config.FIRMS_POLL_MIN * 60)
+
+    def snapshot(self):
+        with self.lock:
+            return list(self.detections)
 
     # ---- API views -----------------------------------------------------------------------
     def detections_view(self, hours=48):

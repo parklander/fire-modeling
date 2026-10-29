@@ -817,16 +817,18 @@
   const LVL = { warning: 3, watch: 2, statement: 1 };
   const escH = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const when = (iso) => new Date(iso).toLocaleString("en-CA", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
-  let ALERTS = null, alertsDismissed = null, FRONT_ALERTS = [];
+  let ALERTS = null, alertsDismissed = null, FRONT_ALERTS = [], FIRE_ALERTS = [];
   const alertKey = (a, x) => `${a.id}|${x.name}`;
   const worst = (list) => list.reduce((w, x) => (LVL[x.level] > LVL[w] ? x.level : w), "statement");
   function renderAlerts() {
     if (!ALERTS) return;
     const active = ALERTS.areas.filter((a) => a.alerts.length);
     const fa = FRONT_ALERTS;  // model-based front watch alerts (ours, not ECCC's)
+    const fire = FIRE_ALERTS;  // FIRMS detections inside an area boundary
     const chip = $("alert-chip");
-    chip.className = "hdr-link alert-chip" + (fa.length ? " on lvl-warning" : active.length ? ` on lvl-${worst(active.flatMap((a) => a.alerts))}` : "");
-    chip.textContent = [active.length ? `⚠ Alerts: ${active.length} base${active.length > 1 ? "s" : ""}` : "",
+    chip.className = "hdr-link alert-chip" + (fa.length || fire.length ? " on lvl-warning" : active.length ? ` on lvl-${worst(active.flatMap((a) => a.alerts))}` : "");
+    chip.textContent = [fire.length ? `🔥 Fire: ${fire.map((x) => x.name).join(", ")}` : "",
+      active.length ? `⚠ Alerts: ${active.length} base${active.length > 1 ? "s" : ""}` : "",
       fa.length ? `⚠ Front: ${[...new Set(fa.map((x) => x.name))].join(", ")}` : ""].filter(Boolean).join(" · ") || "No alerts";
     const sel = ALERTS.areas.find((a) => a.id === $("aoi").value);
     const mine = sel?.alerts || [];
@@ -834,8 +836,9 @@
     // shown when the selected base has alerts (until closed), or when opened from the chip
     const panel = $("alerts");
     const myFront = fa.filter((x) => x.aoi === $("aoi").value);
-    const fkey = key + myFront.map((x) => x.event.time).join(",");
-    if (!panel.dataset.open && ((!mine.length && !myFront.length) || alertsDismissed === fkey)) { panel.hidden = true; return; }
+    const myFire = fire.filter((x) => x.aoi === $("aoi").value);
+    const fkey = key + myFront.map((x) => x.event.time).join(",") + myFire.map((x) => x.latest).join(",");
+    if (!panel.dataset.open && ((!mine.length && !myFront.length && !myFire.length) || alertsDismissed === fkey)) { panel.hidden = true; return; }
     const others = active.filter((a) => a !== sel);
     const checked = sel?.checked || ALERTS.areas[0]?.checked;
     const item = (x) => `<div class="wx-alert lvl-${x.level}"><div class="n">${escH(x.name)}</div>
@@ -846,6 +849,8 @@
       <div class="al-head"><b>ECCC alerts${sel ? ` · ${escH(sel.name)}` : ""}</b><button class="icon" id="al-close" aria-label="Close">×</button></div>
       ${sel ? (mine.length ? mine.map(item).join("") : `<div class="sub">No alerts in effect${sel.region ? ` for ${escH(sel.region)}` : ""}.${sel.page ? ` <a href="${escH(sel.page)}" target="_blank" rel="noopener">Check on weather.gc.ca ↗</a>` : ""}</div>`)
         : `<div class="sub">Pick a base to see its alerts.</div>`}
+      ${fire.length ? `<div class="others"><div class="sub">Satellite fire detections inside an area boundary (NASA FIRMS, last 24 h)</div>${fire.map((x) =>
+        `<button class="lvl-warning fire-al" data-id="${escH(x.aoi)}" title="Show this area with the FIRMS hotspots overlay"><b>🔥</b> ${escH(x.name)}: ${x.count} detection${x.count > 1 ? "s" : ""}, latest ${when(x.latest)}, max FRP ${x.max_frp} MW${x.low_conf_only ? " (low confidence only)" : ""}</button>`).join("")}</div>` : ""}
       ${fa.length ? `<div class="others"><div class="sub">Front watch (RDPS forecast, not an ECCC alert)</div>${fa.map((x) =>
         `<div class="wx-alert lvl-warning"><div class="n">Frontal wind shift · ${escH(x.name)}</div>
           <div class="t">${when(x.event.time)}: ${escH(x.event.from_card)} ${x.event.from_speed} → ${escH(x.event.to_card)} ${x.event.to_speed} km/h, max ${x.event.max_wind}${x.event.max_gust != null ? `, gusts ${x.event.max_gust}` : ""}</div></div>`).join("")}</div>` : ""}
@@ -855,7 +860,10 @@
         ${"Notification" in window && Notification.permission === "default" ? `<button id="al-notify" title="Show a desktop notification when a new alert is issued for a base (while this page is open)">Notify me</button>` : ""}</div>`;
     panel.hidden = false;
     $("al-close").onclick = () => { delete panel.dataset.open; alertsDismissed = fkey; panel.hidden = true; };
-    panel.querySelectorAll(".others button").forEach((b) => (b.onclick = () => selectAOI(b.dataset.id)));
+    panel.querySelectorAll(".others button").forEach((b) => (b.onclick = () => {
+      if (b.classList.contains("fire-al") && !S.firms) { S.firms = true; $("ov-firms").checked = true; savePrefs(); loadHotspots(); }
+      selectAOI(b.dataset.id);
+    }));
     const nb = $("al-notify");
     if (nb) nb.onclick = () => Notification.requestPermission().then(renderAlerts);
   }
@@ -875,6 +883,22 @@
         new Notification(`Frontal wind shift: ${x.name}`, {
           body: `${when(x.event.time)}: ${x.event.from_card} ${x.event.from_speed} → ${x.event.to_card} ${x.event.to_speed} km/h${x.event.max_gust != null ? `, gusts ${x.event.max_gust}` : ""}`,
           tag: `front|${x.id}|${x.event.time}` });
+      }
+    }
+    renderAlerts();
+  }
+  async function loadFireAlerts() {
+    let d;
+    try { d = await (await fetch("/api/firealerts")).json(); } catch (_) { return; }
+    const seen = new Set(FIRE_ALERTS.flatMap((x) => x.detections.map((h) => h.id))), first = loadFireAlerts.done !== true;
+    FIRE_ALERTS = d.active || [];
+    loadFireAlerts.done = true;
+    if (!first && "Notification" in window && Notification.permission === "granted") {
+      for (const x of FIRE_ALERTS) {
+        const fresh = x.detections.filter((h) => !seen.has(h.id));
+        if (fresh.length) new Notification(`Satellite fire detection: ${x.name}`, {
+          body: `${fresh.length} new detection${fresh.length > 1 ? "s" : ""}, latest ${when(x.latest)} (${x.count} in 24 h, max FRP ${x.max_frp} MW)`,
+          tag: `fire|${x.aoi}|${x.latest}` });
       }
     }
     renderAlerts();
@@ -944,6 +968,7 @@
       const ev = JSON.parse(m.data);
       if (ev.type === "alerts") { loadAlerts(); return; }
       if (ev.type === "frontalerts") { loadFrontAlerts(); return; }
+      if (ev.type === "firealerts") { loadFireAlerts(); return; }
       if (ev.type === "incidents") { if (S.firms) loadHotspots(); return; }  // after each FIRMS poll
       clearTimeout(refreshPending);
       refreshPending = setTimeout(async () => {
@@ -964,9 +989,11 @@
   if (startAOI) selectAOI(startAOI);
   loadAlerts();
   loadFrontAlerts();
+  loadFireAlerts();
   loadGoes();
   setInterval(loadGoes, 5 * 60 * 1000);  // a new image every 10 min
   setInterval(loadFrontAlerts, 10 * 60 * 1000);
+  setInterval(loadFireAlerts, 10 * 60 * 1000);
   setInterval(loadAlerts, 5 * 60 * 1000);  // backstop in case an SSE push is missed
   if (S.synoptic) loadFronts();
   setInterval(() => S.synoptic && loadFronts(), 15 * 60 * 1000);  // WPC issues every 3 h

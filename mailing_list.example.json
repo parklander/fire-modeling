@@ -5,12 +5,25 @@
       "id": "shilo-daily",
       "aoi": "shilo",
       "time": "06:30",
-      "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      "days": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun"
+      ],
       "scale": "mb",
       "fire_behaviour": false,
-      "to": ["base.fire.chief@example.ca"],
+      "to": [
+        "base.fire.chief@example.ca"
+      ],
       "cc": [],
-      "bcc": ["range.control@example.ca", "duty.officer@example.ca"]
+      "bcc": [
+        "range.control@example.ca",
+        "duty.officer@example.ca"
+      ]
     }
   ],
   "_front_alerts_note": "Front watch alerts: email when RDPS forecasts a frontal wind shift at the area within within_hours. strength is strong (wind >= 30 km/h or gusts >= 50 after the shift) or any. One email per event; the weather map also shows them and can raise desktop notifications.",
@@ -20,7 +33,22 @@
       "aoi": "shilo",
       "within_hours": 24,
       "strength": "strong",
-      "to": ["base.fire.chief@example.ca"],
+      "to": [
+        "base.fire.chief@example.ca"
+      ],
+      "cc": [],
+      "bcc": []
+    }
+  ],
+  "_fire_alerts_note": "Fire alerts: email when NASA FIRMS detects a fire inside an area's drawn boundary (last 24 h, persistent industrial sources excluded). aois is a list of area ids or \"all\"; include_low_conf also emails low-confidence detections. Each detection is emailed once; new detections send a follow-up.",
+  "fire_alerts": [
+    {
+      "id": "base-fires",
+      "aois": "all",
+      "include_low_conf": false,
+      "to": [
+        "base.fire.chief@example.ca"
+      ],
       "cc": [],
       "bcc": []
     }

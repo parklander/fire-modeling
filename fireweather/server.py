@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import alerts, amqp_listener, aoi, config, goes, frontalerts, fronts, frontwatch, mailer, mbwx, precip, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, report, smoke
+from . import alerts, amqp_listener, aoi, config, goes, firealerts, frontalerts, fronts, frontwatch, mailer, mbwx, precip, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, report, smoke
 
 log = logging.getLogger("server")
 
@@ -28,6 +28,7 @@ wpc_fronts = fronts.Fronts()
 front_watch = frontwatch.FrontWatch(store, wpc_fronts)
 mail = mailer.Mailer(store, wx_alerts)
 front_alerts = frontalerts.FrontAlerts(mail)
+fire_alerts = firealerts.FireAlerts(mail)
 
 
 def _incident_sim(run, ignitions, start, hours, center):
@@ -57,7 +58,7 @@ async def lifespan(app):
         threading.Thread(target=engine.loop, args=(_stop,), name="fwi", daemon=True),
         threading.Thread(target=smoke_engine.loop, args=(_stop,), name="smoke", daemon=True),
         threading.Thread(target=precip_engine.loop, args=(_stop,), name="precip", daemon=True),
-        threading.Thread(target=fires.loop, args=(_stop, lambda: bus.publish({"type": "incidents"})),
+        threading.Thread(target=fires.loop, args=(_stop, lambda: bus.publish({"type": "incidents"}), _check_fire_alerts),
                          name="firms", daemon=True),
         threading.Thread(target=wx_alerts.loop, args=(_stop, lambda: bus.publish({"type": "alerts"})),
                          name="alerts", daemon=True),
@@ -113,6 +114,7 @@ async def save_areas(request: Request):
     except ValueError as e:
         raise HTTPException(400, str(e))
     log.info("areas of interest saved from %s: %d areas", request.client.host, len(saved["areas"]))
+    await asyncio.to_thread(_check_fire_alerts)  # boundaries changed
     return saved
 
 
@@ -126,9 +128,11 @@ async def restore_areas(name: str, request: Request):
     if request.client is None or not aoi.may_edit(request.client.host):
         raise HTTPException(403, "editing areas is only allowed from the server itself or a Tailscale device")
     try:
-        return await asyncio.to_thread(aoi.restore, name)
+        restored = await asyncio.to_thread(aoi.restore, name)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    await asyncio.to_thread(_check_fire_alerts)
+    return restored
 
 
 @app.get("/api/aoi")
@@ -337,6 +341,20 @@ async def national_summary():
 @app.get("/api/hotspots")
 def hotspot_detections(hours: int = Query(48, ge=1, le=120)):
     return {"status": fires.status, "detections": fires.detections_view(hours)}
+
+
+def _check_fire_alerts():
+    try:
+        fire_alerts.check(fires.snapshot())
+    except Exception:
+        logging.getLogger("firealerts").exception("fire alert check failed")
+    bus.publish({"type": "firealerts"})
+
+
+@app.get("/api/firealerts")
+def fire_alert_list():
+    """Areas with satellite fire detections inside their boundary (last 24 h), and recently emailed alerts."""
+    return fire_alerts.view()
 
 
 @app.get("/api/incidents")

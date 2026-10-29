@@ -426,12 +426,14 @@
   const passColour = (i, k) => (i === k ? "#ff3b1f" : `hsl(${45 - 20 * (i / Math.max(1, k))}, 100%, ${62 - 8 * (i / Math.max(1, k))}%)`);
   function drawProgChart() {
     const P = PROG.passes, svg = $("prog-chart"), W = svg.clientWidth || 360, H = 120, padB = 18, padT = 16;
-    const max = Math.max(...P.map((p) => p.frp_sum), 1), step = (W - 8) / P.length, bw = Math.max(2, Math.min(24, step - 3));
+    // Landsat has no FRP: chart detections per pass when no pass has any
+    const byCount = P.every((p) => !p.frp_sum), val = (p) => (byCount ? p.count : p.frp_sum);
+    const max = Math.max(...P.map(val), 1), step = (W - 8) / P.length, bw = Math.max(2, Math.min(24, step - 3));
     let h = `<line x1="0" x2="${W}" y1="${H - padB}" y2="${H - padB}" stroke="rgba(255,255,255,.2)"/>`
-      + `<text x="2" y="10">Total FRP per pass (MW), max ${n(max)}</text>`;
+      + `<text x="2" y="10">${byCount ? "Detections per pass (no FRP from Landsat)" : "Total FRP per pass (MW)"}, max ${n(max)}</text>`;
     let lastDay = "";
     P.forEach((p, i) => {
-      const bh = Math.max(1.5, (H - padB - padT) * p.frp_sum / max), x = 4 + i * step + (step - bw) / 2;
+      const bh = Math.max(1.5, (H - padB - padT) * val(p) / max), x = 4 + i * step + (step - bw) / 2;
       const fill = i > progK ? "rgba(255,255,255,.14)" : passColour(i, progK);
       h += `<rect class="bar" data-i="${i}" x="${x.toFixed(1)}" y="${(H - padB - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2" fill="${fill}">`
         + `<title>${esc(progTime(p.time))} · ${esc(p.sensor)} · ${p.count} detection${p.count > 1 ? "s" : ""} · ${n(p.frp_sum, 1)} MW</title></rect>`;
@@ -459,7 +461,7 @@
     $("prog-label").textContent = `Pass ${progK + 1} of ${P.length} · ${progTime(p.time)} · ${p.sensor}`;
     $("prog-cards").innerHTML = [
       [`${p.count}`, "Detections this pass"],
-      [`${n(p.frp_sum, 1)} MW`, `Total FRP (max ${n(p.frp_max, 1)})`],
+      p.sensor.startsWith("Landsat") ? ["n/a", "FRP (Landsat has none)"] : [`${n(p.frp_sum, 1)} MW`, `Total FRP (max ${n(p.frp_max, 1)})`],
       [gap == null ? "first" : gap < 1 ? `${Math.round(gap * 60)} min` : `${n(gap, 1)} h`, "Since previous pass"],
       [`${n(A[progK], A[progK] < 100 ? 1 : 0)} ha`, "Pixel area so far"],
       [`+${n(A[progK] - prev, 1)} ha`, "New pixel area"],
@@ -516,7 +518,7 @@
     $("flog-list").innerHTML = FLOG.length ? FLOG.map((e, i) => `
       <div class="inc" data-i="${i}">
         <div class="t"><span>${day(e.start)}${day(e.end) !== day(e.start) ? ` – ${day(e.end)}` : ""}</span></div>
-        <div class="m">${e.count} detection${e.count > 1 ? "s" : ""}${a.boundary ? `, ${e.inside} inside the boundary` : ""} · max FRP ${n(e.max_frp, 1)} MW${e.low_conf ? ` · ${e.low_conf} low confidence` : ""}</div>
+        <div class="m">${e.count} detection${e.count > 1 ? "s" : ""}${a.boundary ? `, ${e.inside} inside the boundary` : ""} · ${e.sensors.join(", ")}${e.max_frp ? ` · max FRP ${n(e.max_frp, 1)} MW` : ""}${e.low_conf ? ` · ${e.low_conf} low confidence` : ""}</div>
       </div>`).join("") : `<div class="sub">No fire detections logged at this area yet.</div>`;
   }
   $("flog-list").onclick = (e) => {

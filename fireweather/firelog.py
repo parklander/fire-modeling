@@ -99,7 +99,7 @@ def episodes(aoi, inside_only=False, include_persistent=False):
     """Fire episodes at an area, newest first: runs of days with detections, no more than EPISODE_GAP_DAYS apart."""
     db = connect()
     try:
-        rows = db.execute(f"""SELECT time, frp, inside, low_conf FROM detections WHERE aoi = ?
+        rows = db.execute(f"""SELECT time, frp, inside, low_conf, sensor FROM detections WHERE aoi = ?
                               {_where(inside_only, include_persistent)} ORDER BY time""", (aoi,)).fetchall()
     finally:
         db.close()
@@ -107,15 +107,17 @@ def episodes(aoi, inside_only=False, include_persistent=False):
     for r in rows:
         t = datetime.fromisoformat(r["time"])
         if not eps or t - eps[-1]["_last"] > timedelta(days=EPISODE_GAP_DAYS):
-            eps.append({"start": r["time"], "_last": t, "count": 0, "inside": 0, "low_conf": 0, "max_frp": 0.0})
+            eps.append({"start": r["time"], "_last": t, "count": 0, "inside": 0, "low_conf": 0, "max_frp": 0.0, "sensors": set()})
         e = eps[-1]
         e["_last"], e["end"] = t, r["time"]
         e["count"] += 1
         e["inside"] += r["inside"]
         e["low_conf"] += r["low_conf"]
         e["max_frp"] = max(e["max_frp"], r["frp"] or 0)
+        e["sensors"].add(r["sensor"].split()[0])
     for e in eps:
         del e["_last"]
+        e["sensors"] = sorted(e["sensors"])
     return eps[::-1]
 
 

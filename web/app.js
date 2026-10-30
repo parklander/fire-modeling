@@ -171,13 +171,17 @@
   const meta = await (await fetch("/api/meta")).json();
   const { width: W, height: H, bounds: B } = meta;
   const S = {
-    runs: [], run: null, hour: 0, layer: "rh", playing: false,
+    runs: [], run: null, hour: 0, layer: "prate", playing: false,
     wind: "particles", opacity: 0.75, point: null, followLatest: true, fwiScale: "classes", synoptic: false, synKey: false,
   };
-  try { Object.assign(S, JSON.parse(localStorage.getItem("fw-prefs") || "{}"), { playing: false, point: null }); } catch (_) {}
+  try {
+    const saved = JSON.parse(localStorage.getItem("fw-prefs") || "{}");
+    if (!saved.v && saved.layer === "rh") delete saved.layer;  // humidity was the old default, not a choice
+    Object.assign(S, saved, { playing: false, point: null });
+  } catch (_) {}
   if (!["particles", "arrows", "off"].includes(S.wind)) S.wind = "particles";
   if (S.wind === "particles" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) S.wind = "arrows";
-  const savePrefs = () => { try { localStorage.setItem("fw-prefs", JSON.stringify({ layer: S.layer, wind: S.wind, opacity: S.opacity, fwiScale: S.fwiScale, synoptic: S.synoptic, synKey: S.synKey, firms: S.firms })); } catch (_) {} };
+  const savePrefs = () => { try { localStorage.setItem("fw-prefs", JSON.stringify({ v: 2, layer: S.layer, wind: S.wind, opacity: S.opacity, fwiScale: S.fwiScale, synoptic: S.synoptic, synKey: S.synKey, firms: S.firms })); } catch (_) {} };
 
   const $ = (id) => document.getElementById(id);
   const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -981,7 +985,7 @@
   }
 
   // ---- go -------------------------------------------------------------------
-  setLayer(S.layer in RAMPS ? S.layer : "rh");
+  setLayer(LAYERS.some((l) => l.id === S.layer) ? S.layer : "prate");
   const startAOI = await loadAOIs();
   await loadRuns();
   S.followLatest = true;

@@ -20,6 +20,33 @@ python -m venv .venv
 
 Then open http://127.0.0.1:8000.
 
+### macOS (Apple Silicon)
+
+```
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+caffeinate -i .venv/bin/python -m fireweather --host 0.0.0.0
+```
+
+`caffeinate -i` stops the Mac from idle-sleeping while the server runs. `--host 0.0.0.0` lets other devices on the network reach it (allow incoming connections when macOS asks). If pip can't install `eccodes`, run `brew install eccodes` and try again. Elsewhere in this README, read `.venv\Scripts\python` as `.venv/bin/python`.
+
+### Moving to another machine
+
+These are not in git, so copy them by hand:
+
+- `.env`: the FIRMS key and mail settings.
+- `mailing_list.json`: the email recipients.
+- `data/fire_log.sqlite`: the fire log, including any archive backfills. It can't be rebuilt beyond the last couple of days.
+- `data/mbwx.sqlite` (optional): the Manitoba station history; otherwise re-run its backfill.
+
+Everything else under `data/` rebuilds itself on the first run (about 3 GB of model data). To merge a fire log from another machine without duplicates:
+
+```
+sqlite3 data/fire_log.sqlite "ATTACH 'other_fire_log.sqlite' AS o; INSERT OR IGNORE INTO detections SELECT * FROM o.detections;"
+```
+
+Run one server at a time: two would both send every alert and report email.
+
 ## How it works
 
 - **AMQP trigger** (`fireweather/amqp_listener.py`): subscribes to `amqps://anonymous@dd.weather.gc.ca`, exchange `xpublic`, topic `v02.post.*.WXO-DD.model_rdps.10km.#`. Each notification names a newly published file. Notifications for the 5 fields above queue a download; everything else is ignored. The queue name is stable per machine and has a 3 h expiry, so notifications sent during a short restart are still delivered.

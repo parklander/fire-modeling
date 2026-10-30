@@ -97,12 +97,21 @@
   }
   const ptName = (t) => meta.ptype_names?.[t] ?? "—";
 
-  // ---- GOES-East satellite layers (ECCC GeoMet WMS): observed images, 1 km, every 10 min, ~2 days kept ----------
+  // ---- GOES satellite layers (ECCC GeoMet WMS): observed images, 1 km, every 10 min, ~2 days kept ----------
+  // GOES-West when the map is centred west of SAT_SPLIT_LON (it sees BC and Yukon at a far better angle), else GOES-East.
+  const SAT_SPLIT_LON = -105;
   const SAT = {
-    sat_fire: { key: "fire", title: "GOES-East fire temperature",
+    sat_natural: { key: "natural", title: "natural colour",
+      desc: "Daytime colour image: <b>land green-brown, water clouds white, ice clouds and snow cyan</b>, "
+        + "which separates snow from cloud. Blank at night: use Visible / IR." },
+    sat_vis: { key: "vis", title: "visible",
+      desc: "Daytime visible (0.64 µm), the sharpest image: <b>cloud texture, fog and smoke plumes</b>. Blank at night." },
+    sat_visir: { key: "visir", title: "visible / infrared",
+      desc: "Visible by day, <b>infrared at night</b> (colder cloud tops brighter), so it works around the clock." },
+    sat_fire: { key: "fire", title: "fire temperature",
       desc: "<b>Active fires</b> show as red (small or cooler) through orange and yellow to near-white (large, very hot). "
         + "Surfaces and clouds are muted. By day an RGB of shortwave-infrared bands; at night shortwave infrared, where fires are bright spots." },
-    sat_smoke: { key: "smoke", title: "GOES-East smoke",
+    sat_smoke: { key: "smoke", title: "smoke",
       desc: "By day the blue band, which smoke scatters strongly: <b>smoke shows as a grey-white haze</b>, thicker smoke brighter; "
         + "cloud is also bright but sharper-edged and textured. At night shortwave infrared (smoke isn't visible at night)." },
   };
@@ -114,8 +123,10 @@
     if (isSat(S.layer)) updateSat();
   }
   // the image time for the displayed hour: on GeoMet's 10-min grid, within its window (forecast hours: the latest)
+  const satSide = () => (map.getCenter().lng < SAT_SPLIT_LON ? "west" : "east");
+  const satName = () => (satSide() === "west" ? "GOES-West" : "GOES-East");
   function satTime() {
-    const t = GOES?.layers?.[SAT[S.layer].key];
+    const t = GOES?.layers?.[`${satSide()}:${SAT[S.layer].key}`];
     if (!t) return null;
     const step = t.step_min * 60e3, start = Date.parse(t.start), end = Date.parse(t.end);
     const want = Math.floor(validMs() / step) * step;
@@ -129,12 +140,13 @@
     if (!satLayer || satLayer.options.layers !== st.layer) {
       if (satLayer) satLayer.remove();
       satLayer = L.tileLayer.wms(GOES.wms, { layers: st.layer, format: "image/png", transparent: true, version: "1.3.0",
-        time: st.iso, opacity: S.opacity, zIndex: 5, attribution: "GOES-East imagery: ECCC GeoMet" }).addTo(map);
+        time: st.iso, opacity: S.opacity, zIndex: 5, attribution: `${satName()} imagery: ECCC GeoMet` }).addTo(map);
     } else if (satLayer.wmsParams.time !== st.iso) {
       satLayer.setParams({ time: st.iso });
     }
     const when = new Date(st.iso).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
-    $("legend-desc").innerHTML = `${SAT[S.layer].desc}<br><b>Image ${when}</b>`
+    $("legend-title").textContent = `${satName()} ${SAT[S.layer].title}`;
+    $("legend-desc").innerHTML = `${SAT[S.layer].desc}<br><b>${satName()} image ${when}</b>`
       + (st.latest ? " (latest available: forecast hours show the most recent image)" : st.oldest ? " (oldest kept: about 2 days)" : "");
   }
 
@@ -156,8 +168,11 @@
     { id: "dmc", name: "DMC", group: "FWI2025" },
     { id: "dc", name: "DC", group: "FWI2025" },
     { id: "gfwi", name: "Grass FWI", group: "FWI2025" },
-    { id: "sat_fire", name: "Fire temperature", group: "Satellite (GOES-East)" },
-    { id: "sat_smoke", name: "Smoke", group: "Satellite (GOES-East)" },
+    { id: "sat_natural", name: "Natural colour", group: "Satellite (GOES)" },
+    { id: "sat_vis", name: "Visible", group: "Satellite (GOES)" },
+    { id: "sat_visir", name: "Visible / IR", group: "Satellite (GOES)" },
+    { id: "sat_fire", name: "Fire temperature", group: "Satellite (GOES)" },
+    { id: "sat_smoke", name: "Smoke", group: "Satellite (GOES)" },
   ];
   const READOUT_VARS = ["temp", "rh", "wspd", "wdir", "precip", "prate", "ptype", "cloud", "ffmc", "isi", "bui", "fwi"];
   function badge(v, val) {
@@ -181,7 +196,7 @@
   } catch (_) {}
   if (!["particles", "arrows", "off"].includes(S.wind)) S.wind = "particles";
   if (S.wind === "particles" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) S.wind = "arrows";
-  const savePrefs = () => { try { localStorage.setItem("fw-prefs", JSON.stringify({ v: 2, layer: S.layer, wind: S.wind, opacity: S.opacity, fwiScale: S.fwiScale, synoptic: S.synoptic, synKey: S.synKey, firms: S.firms })); } catch (_) {} };
+  const savePrefs = () => { try { localStorage.setItem("fw-prefs", JSON.stringify({ v: 2, layer: S.layer, wind: S.wind, opacity: S.opacity, fwiScale: S.fwiScale, synoptic: S.synoptic, synKey: S.synKey, firms: S.firms, bounds: S.bounds })); } catch (_) {} };
 
   const $ = (id) => document.getElementById(id);
   const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -265,6 +280,23 @@
   map.createPane("labels").style.zIndex = 620;
   map.getPane("labels").style.pointerEvents = "none";
   L.tileLayer(esri("World_Dark_Gray_Reference"), { pane: "labels", maxNativeZoom: 16 }).addTo(map);
+
+  // ---- province/state and country boundaries (Natural Earth 1:50m): a light line on a dark halo, readable over any layer
+  map.createPane("bounds").style.zIndex = 452;  // above the wind particles (450), below the isobars (455)
+  map.getPane("bounds").style.pointerEvents = "none";
+  const boundsLayer = L.layerGroup();
+  fetch("/static/boundaries.json").then((r) => r.json()).then((b) => {
+    const renderer = L.canvas({ pane: "bounds", padding: 0.3 });
+    const ll = (lines) => lines.map((l) => l.map(([x, y]) => [y, x]));
+    const draw = (lines, w) => {
+      boundsLayer.addLayer(L.polyline(lines, { renderer, interactive: false, color: "#000", opacity: 0.45, weight: w + 2.2 }));
+      boundsLayer.addLayer(L.polyline(lines, { renderer, interactive: false, color: "#fff", opacity: 0.85, weight: w }));
+    };
+    draw(ll(b.province), 1);
+    draw(ll(b.country), 1.8);
+  }).catch(() => {});
+  if (S.bounds !== false) boundsLayer.addTo(map);
+  map.on("moveend", () => isSat(S.layer) && updateSat());  // swaps GOES-East/West as the map crosses SAT_SPLIT_LON
 
   const fieldCanvas = document.createElement("canvas");
   fieldCanvas.width = W; fieldCanvas.height = H;
@@ -506,7 +538,7 @@
     const sat = isSat(S.layer);
     $("legend-bar").hidden = sat; $("legend-ticks").hidden = sat; $("legend-desc").hidden = !sat;
     if (sat) {
-      $("legend-title").textContent = SAT[S.layer].title;
+      $("legend-title").textContent = `${satName()} ${SAT[S.layer].title}`;
       $("legend-scale").hidden = true;
       updateSat();
       return;
@@ -557,7 +589,10 @@
     (i === 0 || LAYERS[i - 1].group !== l.group ? `<span class="group">${l.group}</span>` : "") +
     `<button role="tab" data-v="${l.id}">${l.name}</button>`).join("")
     + `<span class="group">Overlays</span><label class="ov" title="NASA FIRMS satellite fire detections (VIIRS, MODIS), last 48 h">`
-    + `<input type="checkbox" id="ov-firms"> FIRMS hotspots (48 h)</label>`;
+    + `<input type="checkbox" id="ov-firms"> FIRMS hotspots (48 h)</label>`
+    + `<label class="ov" title="Province, state and country boundaries"><input type="checkbox" id="ov-bounds"> Boundaries</label>`;
+  $("ov-bounds").checked = S.bounds !== false;
+  $("ov-bounds").onchange = (e) => { S.bounds = e.target.checked; savePrefs(); S.bounds ? boundsLayer.addTo(map) : boundsLayer.remove(); };
   $("ov-firms").checked = !!S.firms;
   $("ov-firms").onchange = (e) => { S.firms = e.target.checked; savePrefs(); loadHotspots(); };
   if (S.firms) loadHotspots();
@@ -684,6 +719,38 @@
   }
   function syncChartCursor() { for (const c of Object.values(charts)) c.draw(); }
 
+  // ---- 7-day daily outlook (Open-Meteo, via /api/daily): icon, min, range bar coloured like the map, max, precip, wind
+  const WMO = [[0, "☀️", "Clear"], [1, "🌤️", "Mainly clear"], [2, "⛅", "Partly cloudy"], [3, "☁️", "Overcast"],
+    [48, "🌫️", "Fog"], [57, "🌦️", "Drizzle"], [67, "🌧️", "Rain"], [77, "🌨️", "Snow"], [82, "🌦️", "Showers"],
+    [86, "🌨️", "Snow showers"], [99, "⛈️", "Thunderstorms"]];
+  const wmo = (c) => WMO.find(([u]) => c <= u) || WMO.at(-1);
+  async function loadDaily(lat, lng) {
+    const box = $("mg-daily");
+    let d;
+    try { d = await (await fetch(`/api/daily?lat=${lat.toFixed(3)}&lon=${lng.toFixed(3)}`)).json(); } catch (_) { d = null; }
+    if (!S.point || S.point.lat !== lat || S.point.lng !== lng) return;
+    if (!d?.days?.length) { box.hidden = true; return; }
+    const lo = Math.min(...d.days.map((x) => x.temperature_2m_min)), hi = Math.max(...d.days.map((x) => x.temperature_2m_max));
+    const pos = (v) => ((v - lo) / Math.max(1, hi - lo)) * 100;
+    const rgb = (v) => `rgb(${rampColor(RAMPS.temp, v).slice(0, 3).map(Math.round).join(",")})`;
+    const off = d.utc_offset_s / 3600;
+    const rows = d.days.map((x, i) => {
+      const [, icon, what] = wmo(x.weather_code);
+      const day = i === 0 ? "Today" : new Date(`${x.date}T12:00:00Z`).toLocaleDateString("en-CA", { weekday: "short", timeZone: "UTC" });
+      const mn = Math.round(x.temperature_2m_min), mx = Math.round(x.temperature_2m_max), p = x.precipitation_sum ?? 0;
+      return `<div class="dy" title="${x.date}: ${what}">
+        <b>${day}</b><span class="ic" aria-label="${what}">${icon}</span>
+        <span class="tn">${mn}°</span>
+        <span class="bar"><i style="left:${pos(x.temperature_2m_min)}%;width:${Math.max(3, pos(x.temperature_2m_max) - pos(x.temperature_2m_min))}%;background:linear-gradient(90deg,${rgb(x.temperature_2m_min)},${rgb(x.temperature_2m_max)})"></i></span>
+        <span class="tx">${mx}°</span>
+        <span class="pr${p < 0.1 ? " dry" : ""}" title="Precipitation, chance ${x.precipitation_probability_max ?? "—"} %">${p < 0.1 ? "—" : `${p.toFixed(p < 10 ? 1 : 0)} mm`}</span>
+        <span class="wd" title="Max wind ${Math.round(x.wind_speed_10m_max)} km/h, gusts ${Math.round(x.wind_gusts_10m_max)} km/h">${Math.round(x.wind_speed_10m_max)} g${Math.round(x.wind_gusts_10m_max)}</span>
+      </div>`;
+    }).join("");
+    box.innerHTML = `<div class="dy-head"><span>7-day outlook</span><span><a href="https://open-meteo.com/" target="_blank" rel="noopener" style="color:inherit">Open-Meteo</a> · UTC${off < 0 ? "−" : "+"}${Math.abs(off)} · °C · mm · km/h</span></div>${rows}`;
+    box.hidden = false;
+  }
+
   async function loadPoint(lat, lng) {
     if (!S.run) return;
     const r = await fetch(`/api/point?run=${S.run}&lat=${lat}&lon=${lng}`);
@@ -699,6 +766,7 @@
       $("mg-front").innerHTML = fw ? frontWatchHtml(fw, { compact: true }) : "";
       $("mg-front").hidden = !fw;
     }).catch(() => { $("mg-front").hidden = true; });
+    loadDaily(lat, lng);
     $("mg-fire").href = `/fire?lat=${lat.toFixed(5)}&lon=${lng.toFixed(5)}`;
     const aoi = $("aoi").value;
     $("mg-firewx").href = aoi ? `/static/firewx.html?aoi=${aoi}`

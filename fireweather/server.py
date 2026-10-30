@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import alerts, amqp_listener, aoi, config, goes, firealerts, firelog, frontalerts, fronts, frontwatch, mailer, mbwx, precip, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, report, smoke
+from . import alerts, amqp_listener, aoi, config, goes, firealerts, firelog, frontalerts, fronts, frontwatch, mailer, mbwx, precip, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, openmeteo, report, smoke
 
 log = logging.getLogger("server")
 
@@ -268,6 +268,15 @@ async def front_watch_point(lat: float, lon: float):
     if r is None:
         raise HTTPException(404, "no complete model run with sea-level pressure yet, or point outside the domain")
     return r
+
+
+@app.get("/api/daily")
+async def daily_forecast(lat: float, lon: float):
+    """7-day daily forecast (Open-Meteo) for the point panel."""
+    try:
+        return await asyncio.to_thread(openmeteo.daily, lat, lon)
+    except Exception as e:
+        raise HTTPException(502, f"Open-Meteo unavailable: {e}")
 
 
 @app.get("/api/goes")

@@ -198,6 +198,19 @@ button.hdr-link { background: transparent; font: inherit; cursor: pointer; }
 #mg-front .fw.warning .fw-head { color: #ff8a80; }
 #mg-front .fw-src { color: var(--muted); font-size: 11px; }
 #mg-front .fw-strong { color: #ffb3ab; }
+#mg-daily { font-size: 12.5px; }
+#mg-daily .dy-head { display: flex; justify-content: space-between; color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; font-weight: 650; margin-bottom: 2px; }
+#mg-daily .dy-head span:last-child { text-transform: none; letter-spacing: 0; font-weight: 400; }
+#mg-daily .dy { display: grid; grid-template-columns: 44px 22px 30px 1fr 30px 62px 58px; align-items: center; gap: 6px; padding: 2px 0; }
+#mg-daily .dy b { font-weight: 600; }
+#mg-daily .ic { font-size: 16px; line-height: 1; text-align: center; }
+#mg-daily .tn, #mg-daily .tx { text-align: right; font-variant-numeric: tabular-nums; }
+#mg-daily .tn { color: var(--muted); }
+#mg-daily .bar { position: relative; height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); }
+#mg-daily .bar i { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+#mg-daily .pr { color: #8cc4f0; font-variant-numeric: tabular-nums; }
+#mg-daily .pr.dry { color: var(--muted); opacity: .5; }
+#mg-daily .wd { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
 .mg-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 a.btn { text-decoration: none; padding: 7px 10px; white-space: nowrap; }
 .mg-chart { position: relative; flex: 1; min-height: 0; }

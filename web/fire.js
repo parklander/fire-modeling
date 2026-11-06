@@ -106,16 +106,29 @@
     if (fly) map.setView(latlng, 12);
     setTZ(latlng.lat, latlng.lng);
   }
+  // the selected area's drawn boundary: dark halo under a dashed orange line, so it reads over imagery and fuels
+  const aoiOutline = L.layerGroup().addTo(map);
+  function showBoundary(a) {
+    aoiOutline.clearLayers();
+    if (!a?.boundary) return;
+    L.polygon(a.boundary, { color: "#000", opacity: 0.55, weight: 4.5, fill: false, interactive: false }).addTo(aoiOutline);
+    L.polygon(a.boundary, { color: "#ff8a3d", weight: 2.5, fill: false, dashArray: "8 5", interactive: false }).addTo(aoiOutline);
+  }
   function selectAOI(id) {
     const a = aoiData.areas.find((x) => x.id === id);
     if (!a) return;
     try { localStorage.setItem("fw-aoi", id); } catch (_) {}
+    showBoundary(a);
     setIgnition(L.latLng(a.lat, a.lon), true);
+    if (a.boundary) map.fitBounds(L.latLngBounds(a.boundary).pad(0.08), { maxZoom: 13 });
   }
   $("aoi").onchange = (e) => selectAOI(e.target.value);
   map.on("click", (e) => setIgnition(e.latlng));
   const qp = new URLSearchParams(location.search);
-  if (qp.get("lat") && qp.get("lon")) setIgnition(L.latLng(+qp.get("lat"), +qp.get("lon")), true);
+  if (qp.get("lat") && qp.get("lon")) {
+    showBoundary(aoiData.areas.find((x) => x.id === $("aoi").value));
+    setIgnition(L.latLng(+qp.get("lat"), +qp.get("lon")), true);
+  }
   else selectAOI($("aoi").value);
 
   // ---- run ----------------------------------------------------------------------------

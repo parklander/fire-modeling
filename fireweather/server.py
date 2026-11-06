@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import alerts, amqp_listener, aoi, config, goes, firealerts, firelog, frontalerts, fronts, frontwatch, mailer, mbwx, precip, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, openmeteo, report, smoke
+from . import alerts, amqp_listener, aoi, config, goes, firealerts, firelog, frontalerts, fronts, frontwatch, mailer, mbwx, precip, firemodel, firewx, fwi_engine, grid, hotspots, ingest, national, openmeteo, report, smoke, cwfis
 
 log = logging.getLogger("server")
 
@@ -277,6 +277,12 @@ async def daily_forecast(lat: float, lon: float):
         return await asyncio.to_thread(openmeteo.daily, lat, lon)
     except Exception as e:
         raise HTTPException(502, f"Open-Meteo unavailable: {e}")
+
+
+@app.get("/api/cwfis")
+async def cwfis_layers():
+    """Official CWFIS daily fire weather layers (NRCan WMS): date range and legend classes per layer."""
+    return {"wms": cwfis.WMS, "layers": await asyncio.to_thread(cwfis.info)}
 
 
 @app.get("/api/goes")

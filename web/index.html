@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RDPS Fire Weather</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="/static/style.css?v=16">
+<link rel="stylesheet" href="/static/style.css?v=19">
 </head>
 <body>
 <div id="map"></div>
@@ -35,8 +35,24 @@
     <select id="run-select" title="Model run"></select>
     <button class="hdr-link alert-chip" id="alert-chip" type="button" title="ECCC weather alerts, front watch and satellite fire detections at the bases">Alerts</button>
     <a class="hdr-link" href="/static/national.html" target="_blank" rel="noopener" title="Weekly fire weather summary for all bases">National ↗</a>
+    <button class="hdr-link key-btn" id="settings-btn" type="button" title="Settings: default area and views" aria-label="Settings" aria-expanded="false">⚙</button>
   </div>
 </header>
+
+<aside class="panel" id="settings" hidden aria-label="Settings">
+  <div class="sk-head"><b>Settings</b><button class="icon" id="settings-close" aria-label="Close">×</button></div>
+  <div class="sub">What the map opens with, saved in this browser. "Last used" keeps whatever you had last time.</div>
+  <label>Default area <select id="st-aoi"></select></label>
+  <label>Default layer <select id="st-layer"></select></label>
+  <label>Wind <select id="st-wind"><option value="last">Last used</option><option value="particles">Particles</option><option value="arrows">Arrows</option><option value="off">Off</option></select></label>
+  <label>Synoptic overlay <select id="st-synoptic" class="st-tog"></select></label>
+  <label>FIRMS hotspots <select id="st-firms" class="st-tog"></select></label>
+  <label>Boundaries <select id="st-bounds" class="st-tog"></select></label>
+  <label>Follow the current time <select id="st-follow"><option value="0">Off</option><option value="5">After 5 min</option>
+    <option value="10">After 10 min</option><option value="30">After 30 min</option></select></label>
+  <div class="sub">When the time slider hasn't been touched for that long, it moves to the current hour and keeps up with it.</div>
+  <div class="st-actions"><button id="st-save" type="button">Save and apply</button></div>
+</aside>
 
 <nav class="panel" id="vars" role="tablist" aria-orientation="vertical" aria-label="Map layer"></nav>
 
@@ -142,6 +158,6 @@
 <script src="/static/windlayer.js?v=1"></script>
 <script src="/static/synoptic.js?v=1"></script>
 <script src="/static/frontwatch.js?v=1"></script>
-<script src="/static/app.js?v=33"></script>
+<script src="/static/app.js?v=36"></script>
 </body>
 </html>

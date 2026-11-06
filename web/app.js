@@ -114,13 +114,35 @@
     sat_smoke: { key: "smoke", title: "smoke",
       desc: "By day the blue band, which smoke scatters strongly: <b>smoke shows as a grey-white haze</b>, thicker smoke brighter; "
         + "cloud is also bright but sharper-edged and textured. At night shortwave infrared (smoke isn't visible at night)." },
+    // official CWFIS daily maps (NRCan WMS), shown for the local date of the displayed hour
+    cw_fwi: { src: "cwfis", key: "fwi", title: "FWI", desc: "Fire Weather Index: general fire intensity, from ISI and BUI." },
+    cw_isi: { src: "cwfis", key: "isi", title: "ISI", desc: "Initial Spread Index: expected rate of spread, from wind and FFMC." },
+    cw_ffmc: { src: "cwfis", key: "ffmc", title: "FFMC", desc: "Fine Fuel Moisture Code: dryness of litter and fine fuels, i.e. ease of ignition." },
+    cw_bui: { src: "cwfis", key: "bui", title: "BUI", desc: "Buildup Index: fuel available for combustion, from DMC and DC." },
+    cw_dmc: { src: "cwfis", key: "dmc", title: "DMC", desc: "Duff Moisture Code: dryness of loosely compacted organic layers." },
+    cw_dc: { src: "cwfis", key: "dc", title: "DC", desc: "Drought Code: dryness of deep organic layers; seasonal drought." },
+    cw_fdr: { src: "cwfis", key: "fdr", title: "fire danger", desc: "Fire danger class as mapped by CWFIS." },
+    cw_hfi: { src: "cwfis", key: "hfi", title: "head fire intensity", desc: "Head Fire Intensity (FBP System) for the mapped fuel types." },
   };
   for (const k of Object.keys(SAT)) RAMPS[k] = { sat: true };
   const isSat = (v) => v in SAT;
-  let GOES = null, satLayer = null;
+  const isCwfis = (v) => SAT[v]?.src === "cwfis";
+  let GOES = null, CWFIS = null, satLayer = null;
   async function loadGoes() {
     try { GOES = await (await fetch("/api/goes")).json(); } catch (_) { return; }
-    if (isSat(S.layer)) updateSat();
+    if (isSat(S.layer) && !isCwfis(S.layer)) updateSat();
+  }
+  async function loadCwfis() {
+    try { CWFIS = await (await fetch("/api/cwfis")).json(); } catch (_) { return; }
+    if (isCwfis(S.layer)) updateSat();
+  }
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  // the CWFIS map for the displayed hour's local date, within the layer's range
+  function cwfisTime() {
+    const t = CWFIS?.layers?.[SAT[S.layer].key];
+    if (!t) return null;
+    const day = ymd(new Date(validMs())), date = day < t.start ? t.start : day > t.end ? t.end : day;
+    return { iso: date, layer: t.layer, legend: t.legend, wms: CWFIS.wms };
   }
   // the image time for the displayed hour: on GeoMet's 10-min grid, within its window (forecast hours: the latest)
   const satSide = () => (map.getCenter().lng < SAT_SPLIT_LON ? "west" : "east");
@@ -135,14 +157,25 @@
   }
   function updateSat() {
     if (!isSat(S.layer)) { if (satLayer) { satLayer.remove(); satLayer = null; } return; }
-    const st = satTime();
-    if (!st) { $("legend-desc").innerHTML = SAT[S.layer].desc + "<br><i>Satellite image times unavailable.</i>"; return; }
-    if (!satLayer || satLayer.options.layers !== st.layer) {
+    const cw = isCwfis(S.layer), st = cw ? cwfisTime() : satTime();
+    if (!st) { $("legend-desc").innerHTML = SAT[S.layer].desc + `<br><i>${cw ? "CWFIS maps" : "Satellite image times"} unavailable.</i>`; return; }
+    const url = cw ? CWFIS.wms : GOES.wms;
+    if (!satLayer || satLayer.options.layers !== st.layer || satLayer._url !== url) {
       if (satLayer) satLayer.remove();
-      satLayer = L.tileLayer.wms(GOES.wms, { layers: st.layer, format: "image/png", transparent: true, version: "1.3.0",
-        time: st.iso, opacity: S.opacity, zIndex: 5, attribution: `${satName()} imagery: ECCC GeoMet` }).addTo(map);
+      satLayer = L.tileLayer.wms(url, { layers: st.layer, format: "image/png", transparent: true, version: "1.3.0",
+        time: st.iso, opacity: S.opacity, zIndex: 5,
+        attribution: cw ? "Fire weather: CWFIS, Natural Resources Canada" : `${satName()} imagery: ECCC GeoMet` }).addTo(map);
     } else if (satLayer.wmsParams.time !== st.iso) {
       satLayer.setParams({ time: st.iso });
+    }
+    if (cw) {
+      const today = ymd(new Date()), day = new Date(`${st.iso}T12:00:00`);
+      const kind = st.iso < today ? "observed (interpolated station data)" : st.iso === today ? "CWFIS forecast for today" : "NAEFS ensemble forecast";
+      $("legend-title").textContent = `CWFIS ${SAT[S.layer].title} · ${day.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}`;
+      $("legend-desc").innerHTML = `<div class="cw-classes">${st.legend.map((c) => `<span><i style="background:${c.color}"></i>${c.label.replace(/[&<>"]/g, "")}</span>`).join("")}</div>`
+        + `${SAT[S.layer].desc} Daily, at noon local standard time.<br><b>${kind}</b>`
+        + (ymd(new Date(validMs())) !== st.iso ? " (nearest day available)" : "");
+      return;
     }
     const when = new Date(st.iso).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
     $("legend-title").textContent = `${satName()} ${SAT[S.layer].title}`;
@@ -168,6 +201,14 @@
     { id: "dmc", name: "DMC", group: "FWI2025" },
     { id: "dc", name: "DC", group: "FWI2025" },
     { id: "gfwi", name: "Grass FWI", group: "FWI2025" },
+    { id: "cw_fwi", name: "FWI", group: "CWFIS (official)" },
+    { id: "cw_isi", name: "ISI", group: "CWFIS (official)" },
+    { id: "cw_ffmc", name: "FFMC", group: "CWFIS (official)" },
+    { id: "cw_bui", name: "BUI", group: "CWFIS (official)" },
+    { id: "cw_dmc", name: "DMC", group: "CWFIS (official)" },
+    { id: "cw_dc", name: "DC", group: "CWFIS (official)" },
+    { id: "cw_fdr", name: "Fire danger", group: "CWFIS (official)" },
+    { id: "cw_hfi", name: "Head fire intensity", group: "CWFIS (official)" },
     { id: "sat_natural", name: "Natural colour", group: "Satellite (GOES)" },
     { id: "sat_vis", name: "Visible", group: "Satellite (GOES)" },
     { id: "sat_visir", name: "Visible / IR", group: "Satellite (GOES)" },
@@ -194,9 +235,15 @@
     if (!saved.v && saved.layer === "rh") delete saved.layer;  // humidity was the old default, not a choice
     Object.assign(S, saved, { playing: false, point: null });
   } catch (_) {}
+  // settings (the ⚙ panel): what the page opens with; "last" keeps the last-used value from fw-prefs
+  const CFG = { aoi: "last", layer: "last", wind: "last", synoptic: "last", firms: "last", bounds: "last", follow: 10 };
+  try { Object.assign(CFG, JSON.parse(localStorage.getItem("fw-settings") || "{}")); } catch (_) {}
+  if (CFG.layer !== "last") S.layer = CFG.layer;
+  if (CFG.wind !== "last") S.wind = CFG.wind;
+  for (const k of ["synoptic", "firms", "bounds"]) if (CFG[k] !== "last") S[k] = CFG[k] === "on";
   if (!["particles", "arrows", "off"].includes(S.wind)) S.wind = "particles";
   if (S.wind === "particles" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) S.wind = "arrows";
-  const savePrefs = () => { try { localStorage.setItem("fw-prefs", JSON.stringify({ v: 2, layer: S.layer, wind: S.wind, opacity: S.opacity, fwiScale: S.fwiScale, synoptic: S.synoptic, synKey: S.synKey, firms: S.firms, bounds: S.bounds })); } catch (_) {} };
+  const savePrefs = () => { try { localStorage.setItem("fw-prefs", JSON.stringify({ v: 2, layer: S.layer, wind: S.wind, opacity: S.opacity, fwiScale: S.fwiScale, synoptic: S.synoptic, synKey: S.synKey, firms: S.firms, bounds: S.bounds, collapsed: S.collapsed })); } catch (_) {} };
 
   const $ = (id) => document.getElementById(id);
   const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -513,6 +560,7 @@
   }
 
   function setRun(run) {
+    touchTime();
     const keep = S.run ? validMs() : Date.now();
     S.run = run;
     S.hour = hourAt(run, keep);
@@ -528,6 +576,7 @@
     S.hour = h; updateTimebar(); render();
   }
   function step(dir) {
+    touchTime();
     const hrs = availableHours(), i = hrs.indexOf(S.hour);
     if (!hrs.length) return;
     setHour(hrs[(i + dir + hrs.length) % hrs.length]);
@@ -538,7 +587,6 @@
     const sat = isSat(S.layer);
     $("legend-bar").hidden = sat; $("legend-ticks").hidden = sat; $("legend-desc").hidden = !sat;
     if (sat) {
-      $("legend-title").textContent = `${satName()} ${SAT[S.layer].title}`;
       $("legend-scale").hidden = true;
       updateSat();
       return;
@@ -585,12 +633,21 @@
   }
 
   // ---- variable tabs --------------------------------------------------------
+  // group headings collapse their group (remembered); a collapsed group still shows its selected layer
+  const groupHead = (g) => `<button class="group" type="button" data-g="${g}" aria-expanded="true">${g}</button>`;
   $("vars").innerHTML = LAYERS.map((l, i) =>
-    (i === 0 || LAYERS[i - 1].group !== l.group ? `<span class="group">${l.group}</span>` : "") +
-    `<button role="tab" data-v="${l.id}">${l.name}</button>`).join("")
-    + `<span class="group">Overlays</span><label class="ov" title="NASA FIRMS satellite fire detections (VIIRS, MODIS), last 48 h">`
+    (i === 0 || LAYERS[i - 1].group !== l.group ? groupHead(l.group) : "") +
+    `<button role="tab" data-v="${l.id}" data-g="${l.group}">${l.name}</button>`).join("")
+    + groupHead("Overlays") + `<label class="ov" data-g="Overlays" title="NASA FIRMS satellite fire detections (VIIRS, MODIS), last 48 h">`
     + `<input type="checkbox" id="ov-firms"> FIRMS hotspots (48 h)</label>`
-    + `<label class="ov" title="Province, state and country boundaries"><input type="checkbox" id="ov-bounds"> Boundaries</label>`;
+    + `<label class="ov" data-g="Overlays" title="Province, state and country boundaries"><input type="checkbox" id="ov-bounds"> Boundaries</label>`;
+  if (!Array.isArray(S.collapsed)) S.collapsed = [];
+  function applyCollapse() {
+    for (const h of $("vars").querySelectorAll("button.group")) h.setAttribute("aria-expanded", !S.collapsed.includes(h.dataset.g));
+    for (const el of $("vars").querySelectorAll("[data-g]:not(.group)")) {
+      el.hidden = S.collapsed.includes(el.dataset.g) && el.dataset.v !== S.layer;
+    }
+  }
   $("ov-bounds").checked = S.bounds !== false;
   $("ov-bounds").onchange = (e) => { S.bounds = e.target.checked; savePrefs(); S.bounds ? boundsLayer.addTo(map) : boundsLayer.remove(); };
   $("ov-firms").checked = !!S.firms;
@@ -598,10 +655,17 @@
   if (S.firms) loadHotspots();
   function setLayer(v) {
     S.layer = v; savePrefs();
-    for (const b of $("vars").querySelectorAll("button")) b.setAttribute("aria-selected", b.dataset.v === v);
+    for (const b of $("vars").querySelectorAll("button[data-v]")) b.setAttribute("aria-selected", b.dataset.v === v);
+    applyCollapse();
     snapHour(); updateTimebar(); drawLegend(); render();
   }
-  $("vars").onclick = (e) => e.target.dataset.v && setLayer(e.target.dataset.v);
+  $("vars").onclick = (e) => {
+    const g = e.target.closest("button.group")?.dataset.g;
+    if (g) {
+      S.collapsed = S.collapsed.includes(g) ? S.collapsed.filter((x) => x !== g) : [...S.collapsed, g];
+      savePrefs(); applyCollapse();
+    } else if (e.target.dataset.v) setLayer(e.target.dataset.v);
+  };
   $("legend-scale").onclick = (e) => {
     const sc = e.target.dataset?.scale;
     if (!sc || sc === S.fwiScale) return;
@@ -714,7 +778,7 @@
         },
         ...extra,
       },
-      onClick: (_e, els, chart) => { if (els.length) setHour(chart.$hours[els[0].index]); },
+      onClick: (_e, els, chart) => { if (els.length) { touchTime(); setHour(chart.$hours[els[0].index]); } },
     };
   }
   function syncChartCursor() { for (const c of Object.values(charts)) c.draw(); }
@@ -994,8 +1058,9 @@
       $("aoi").innerHTML = `<option value="">Custom point</option>` +
         AOIS.map((a) => `<option value="${a.id}">${a.name}${a.prov ? ` (${a.prov})` : ""}</option>`).join("") +
         `<option value="__edit">Edit areas…</option>`;
-      let saved = null;
-      try { saved = localStorage.getItem("fw-aoi"); } catch (_) {}
+      if (CFG.aoi === "none") return null;
+      let saved = CFG.aoi !== "last" ? CFG.aoi : null;
+      try { saved ??= localStorage.getItem("fw-aoi"); } catch (_) {}
       return AOIS.some((a) => a.id === saved) ? saved : d.default;
     } catch (_) {
       return null;
@@ -1007,7 +1072,7 @@
   };
 
   // ---- controls -------------------------------------------------------------
-  $("hour").oninput = (e) => setHour(+e.target.value);
+  $("hour").oninput = (e) => { touchTime(); setHour(+e.target.value); };
   $("run-select").onchange = (e) => setRun(e.target.value);
   $("wind-mode").value = S.wind;
   $("wind-mode").onchange = (e) => { S.wind = e.target.value; savePrefs(); wind.setMode(S.wind); render(); };
@@ -1020,7 +1085,7 @@
     $("play").textContent = on ? "❚❚" : "▶";
     clearInterval(playTimer);
     if (on) playTimer = setInterval(() => step(1), 450);
-    else prefetch();
+    else { touchTime(); prefetch(); }
   }
   $("play").onclick = () => setPlaying(!S.playing);
   document.addEventListener("keydown", (e) => {
@@ -1052,6 +1117,48 @@
     };
   }
 
+  // ---- follow the current time: once the slider has sat untouched for CFG.follow minutes, keep it on the current hour
+  let timeTouched = 0;
+  function touchTime() { timeTouched = Date.now(); }
+  function followNow() {
+    if (!+CFG.follow || S.playing || !S.run || !S.followLatest || Date.now() - timeTouched < CFG.follow * 60e3) return;
+    const hrs = availableHours(), h = hourAt(S.run, Date.now());
+    if (!hrs.length) return;
+    const near = hrs.reduce((a, b) => (Math.abs(b - h) < Math.abs(a - h) ? b : a));
+    if (near !== S.hour) setHour(near);
+  }
+  setInterval(followNow, 60e3);
+  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && followNow());
+
+  // ---- settings panel ---------------------------------------------------------
+  const TOG = `<option value="last">Last used</option><option value="on">On</option><option value="off">Off</option>`;
+  for (const el of document.querySelectorAll(".st-tog")) el.innerHTML = TOG;
+  $("st-layer").innerHTML = `<option value="last">Last used</option>` + LAYERS.map((l) => `<option value="${l.id}">${l.group}: ${l.name}</option>`).join("");
+  function openSettings(on) {
+    $("settings").hidden = !on;
+    $("settings-btn").setAttribute("aria-expanded", on);
+    if (!on) return;
+    $("st-aoi").innerHTML = `<option value="last">Last used</option><option value="none">None (whole map)</option>`
+      + AOIS.map((a) => `<option value="${a.id}">${a.name}${a.prov ? ` (${a.prov})` : ""}</option>`).join("");
+    for (const k of ["aoi", "layer", "wind", "synoptic", "firms", "bounds", "follow"]) $(`st-${k}`).value = String(CFG[k]);
+  }
+  $("settings-btn").onclick = () => openSettings($("settings").hidden);
+  $("settings-close").onclick = () => openSettings(false);
+  $("st-save").onclick = () => {
+    for (const k of ["aoi", "layer", "wind", "synoptic", "firms", "bounds"]) CFG[k] = $(`st-${k}`).value;
+    CFG.follow = +$("st-follow").value;
+    try { localStorage.setItem("fw-settings", JSON.stringify(CFG)); } catch (_) {}
+    // apply now as well as on the next visit
+    if (CFG.layer !== "last" && CFG.layer !== S.layer) setLayer(CFG.layer);
+    if (CFG.wind !== "last" && CFG.wind !== S.wind) { $("wind-mode").value = CFG.wind; $("wind-mode").dispatchEvent(new Event("change")); }
+    for (const [k, id] of [["synoptic", "synoptic-on"], ["firms", "ov-firms"], ["bounds", "ov-bounds"]]) {
+      if (CFG[k] !== "last" && $(id).checked !== (CFG[k] === "on")) { $(id).checked = CFG[k] === "on"; $(id).dispatchEvent(new Event("change")); }
+    }
+    if (CFG.aoi !== "last" && CFG.aoi !== "none" && CFG.aoi !== $("aoi").value) selectAOI(CFG.aoi);
+    timeTouched = 0; followNow();
+    openSettings(false);
+  };
+
   // ---- go -------------------------------------------------------------------
   setLayer(LAYERS.some((l) => l.id === S.layer) ? S.layer : "prate");
   const startAOI = await loadAOIs();
@@ -1063,7 +1170,9 @@
   loadFrontAlerts();
   loadFireAlerts();
   loadGoes();
-  setInterval(loadGoes, 5 * 60 * 1000);  // a new image every 10 min
+  loadCwfis();
+  setInterval(loadGoes, 5 * 60 * 1000);
+  setInterval(loadCwfis, 60 * 60 * 1000);  // CWFIS publishes daily  // a new image every 10 min
   setInterval(loadFrontAlerts, 10 * 60 * 1000);
   setInterval(loadFireAlerts, 10 * 60 * 1000);
   setInterval(loadAlerts, 5 * 60 * 1000);  // backstop in case an SSE push is missed
